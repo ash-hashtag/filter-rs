@@ -21,7 +21,7 @@ use crossterm::{
     QueueableCommand,
 };
 use main_pane::MainPane;
-use pages::Page;
+use pages::{Page, Pages};
 use ratatui::{prelude::CrosstermBackend, text::Span};
 use state::State;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -30,14 +30,38 @@ const PREFIX_KEY: char = 'g';
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut page = Page::with_capacity(1024);
-    for i in 0..10 {
-        page.add_str(&format!("'\t{i}\t'"));
+    let mut pages = Pages::new(80, 10);
+    let mut s = String::new();
+    use std::fmt::Write;
+    for i in 0..100 {
+        s.clear();
+        for _ in 0..10 {
+            write!(&mut s, "{i}").unwrap();
+        }
+        pages.add_line(&s);
     }
 
-    for i in 0..page.len() {
-        println!("{:?}", page.get(i).unwrap());
+    // for i in 0..pages.len() {
+    //     println!("{:?}", pages.get_line(i).unwrap());
+    // }
+
+    for line in pages.get_lines() {
+        println!("{}", line.s);
     }
+
+    println!("=======================");
+
+    for line in pages.get_lines().rev() {
+        println!("{}", line.s);
+    }
+    println!("=======================");
+
+    let buf = pages.get_lines_per_frame(10, 5);
+    println!("{buf}");
+
+    // for i in 0..page.len() {
+    //     println!("{:?}", page.get(i).unwrap());
+    // }
 
     // println!("width: {}", width);
     // start_ratatui()?;
@@ -97,7 +121,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             };
         }
 
-        main_pane.add_line(format!("#{}", count));
+        // main_pane.add_line(&format!("#{}", count));
         term.draw(|frame| main_pane.draw(frame))?;
     }
 

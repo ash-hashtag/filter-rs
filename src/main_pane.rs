@@ -7,21 +7,18 @@ use crossterm::{
 };
 use ratatui::{
     layout::{
-        Constraint::{Fill, Length, Min},
-        Layout, Rect, Size,
+        Constraint::{Length, Min},
+        Layout,
     },
-    style::Stylize,
-    text::Span,
-    widgets::{Block, List, Paragraph, StatefulWidget, Wrap},
+    widgets::Block,
     Frame,
 };
 
-use crate::{scroll_view::ScrollView, scroll_view_state::ScrollViewState};
+use crate::pages::Pages;
 
 pub struct MainPane {
     start_position: (u16, u16),
-    lines: Vec<String>,
-    scroll_view_state: ScrollViewState,
+    pages: Pages,
 }
 
 const SCROLL_VIEW_HEIGHT: u16 = 200;
@@ -37,45 +34,32 @@ impl MainPane {
             .unwrap();
         stdout.queue(cursor::Hide).unwrap();
         stdout.queue(cursor::MoveToRow(0)).unwrap();
-
         stdout.flush().unwrap();
-        let lines = Vec::new();
         Self {
             start_position,
-            lines,
-            scroll_view_state: ScrollViewState::new(),
+            pages: Pages::new(40_000, 10),
         }
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
         let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
         let [title_area, main_area, status_area] = vertical.areas(frame.area());
-        let para = self.lines.join("\n");
-        let lines = self.lines.iter().map(|x| x.as_str()).collect::<Vec<_>>();
 
-        let main_content = List::new(lines);
-
-        // let main_content = Paragraph::new(para);
-        let status = format!("No. of lines {} ", self.lines.len());
+        let status = format!("No. of lines {} ", self.pages.len());
         frame.render_widget(Block::bordered().title("Filter"), title_area);
-        frame.render_widget(main_content, main_area);
-
-        // let mut scroll_view = ScrollView::new(Size::new(main_area.width, SCROLL_VIEW_HEIGHT));
-        // scroll_view.render_widget(main_content, scroll_view.area());
-        // scroll_view.render(main_area, frame.buffer_mut(), &mut self.scroll_view_state);
         frame.render_widget(Block::bordered().title(status.as_str()), status_area);
     }
 
-    pub fn scroll_up(&mut self) {
-        self.scroll_view_state.scroll_up();
+    pub fn add_line(&mut self, s: &str) {
+        self.pages.add_line(s)
     }
 
-    pub fn scroll_down(&mut self) {
-        self.scroll_view_state.scroll_down();
+    pub fn scroll_up(&self) {
+        todo!()
     }
 
-    pub fn add_line(&mut self, s: impl Into<String>) {
-        self.lines.push(s.into());
+    pub fn scroll_down(&self) {
+        todo!()
     }
 }
 
