@@ -13,20 +13,20 @@ pub type Sender = UnboundedSender<String>;
 pub type Receiver = UnboundedReceiver<u8>;
 
 pub struct ChildHandle {
-    pub result_handle: JoinHandle<std::io::Result<ExitStatus>>,
     pub stdin_handle: JoinHandle<()>,
     pub stderr_handle: JoinHandle<()>,
     pub stdout_handle: JoinHandle<()>,
+    child: Child,
 }
 
-// impl Drop for ChildHandle {
-//     fn drop(&mut self) {
-//         self.result_handle.abort();
-//         self.stdin_handle.abort();
-//         self.stdout_handle.abort();
-//         self.stderr_handle.abort();
-//     }
-// }
+impl Drop for ChildHandle {
+    fn drop(&mut self) {
+        self.stdin_handle.abort();
+        self.stdout_handle.abort();
+        self.stderr_handle.abort();
+        self.child.start_kill().unwrap();
+    }
+}
 
 pub fn spawn_child_process(
     args: &[String],
@@ -49,7 +49,7 @@ pub fn spawn_child_process(
     let stdin = child.stdin.take().context("No stdin of child")?;
 
     Ok(ChildHandle {
-        result_handle: tokio::spawn(get_result(child)),
+        child,
         stdin_handle: tokio::spawn(write_bytes(stdin, stdin_rx)),
         stderr_handle: tokio::spawn(read_lines(stderr, stderr_tx)),
         stdout_handle: tokio::spawn(read_lines(stdout, stdout_tx)),

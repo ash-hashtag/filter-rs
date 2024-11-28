@@ -2,8 +2,7 @@ use std::io::Write;
 
 use crossterm::{cursor, terminal, QueueableCommand};
 
-const PAGE_SIZE: usize = 1024 * 1024 * 4; // 4 MB
-const MAX_PAGES: usize = 10; // 40 MB
+use crate::pages::Pages;
 
 #[derive(Default, Copy, Clone)]
 pub struct Vec2 {
@@ -17,17 +16,19 @@ impl Vec2 {
 }
 
 pub struct State {
-    pages: Vec<String>,
+    pages: Pages,
     cursor_position: Vec2,
+    current_search_term: String,
+    current_found_lines: Vec<String>,
 }
 
 impl State {
     pub fn new() -> Self {
-        let mut v = Vec::with_capacity(MAX_PAGES);
-        v.push(String::with_capacity(PAGE_SIZE));
         Self {
-            pages: v,
+            pages: Pages::default(),
             cursor_position: Vec2::new(0, 0),
+            current_search_term: String::new(),
+            current_found_lines: Vec::new(),
         }
     }
 
@@ -52,25 +53,13 @@ impl State {
     }
 
     pub fn add_line(&mut self, s: &str) -> anyhow::Result<()> {
-        let last_page = self.pages.last().unwrap();
-        if last_page.len() + s.len() > last_page.capacity() {
-            if self.pages.len() >= MAX_PAGES {
-                self.pages.remove(0);
-            }
-            self.pages.push(String::with_capacity(PAGE_SIZE));
-        }
-        self.pages.last_mut().unwrap().push_str(s);
+        self.pages.add_line(s);
         let mut stdout = std::io::stdout();
-        // stdout.queue(cursor::MoveTo(
-        //     self.cursor_position.x,
-        //     self.cursor_position.y,
-        // ))?;
         stdout.write(s.as_bytes())?;
         stdout.queue(cursor::MoveToColumn(0))?;
-
-        // let (x, y) = cursor::position()?;
-        // self.cursor_position = Vec2::new(x, y);
-
+        if !self.current_search_term.is_empty() && s.contains(&self.current_search_term) {
+            self.current_found_lines.push(s.into());
+        }
         Ok(())
     }
 
@@ -99,11 +88,9 @@ impl State {
         Ok(())
     }
 
-    pub fn search_string(&self, s: &str) -> anyhow::Result<Vec<String>> {
-        let area = self.width() * self.height();
-
-        for page in self.pages.iter().rev() {
-            for line in page.lines().rev() {}
-        }
+    // To Clear put an empty string
+    pub fn set_search_string(&mut self, s: impl Into<String>) {
+        self.current_search_term = s.into();
+        self.current_found_lines.clear();
     }
 }
