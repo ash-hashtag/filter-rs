@@ -21,50 +21,15 @@ use crossterm::{
     QueueableCommand,
 };
 use filter_scroll_view::main_pane_draw;
-use pages::Pages;
 use ratatui::prelude::CrosstermBackend;
 use state::State;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 
 const PREFIX_KEY: char = 'g';
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logger();
-    // let mut pages = Pages::new(80, 10);
-    // let mut s = String::new();
-    // use std::fmt::Write;
-    // for i in 0..100 {
-    //     s.clear();
-    //     for _ in 0..10 {
-    //         write!(&mut s, "{i}").unwrap();
-    //     }
-    //     pages.add_line(&s);
-    // }
-
-    // // for i in 0..pages.len() {
-    // //     println!("{:?}", pages.get_line(i).unwrap());
-    // // }
-
-    // for line in pages.get_lines() {
-    //     println!("{}", line.s);
-    // }
-
-    // println!("=======================");
-
-    // for line in pages.get_lines().rev() {
-    //     println!("{}", line.s);
-    // }
-    // println!("=======================");
-
-    // let buf = pages.get_lines_per_frame(10, 5);
-    // println!("{buf}");
-
-    // for i in 0..page.len() {
-    //     println!("{:?}", page.get(i).unwrap());
-    // }
-
-    // println!("width: {}", width);
     start_ratatui()?;
     Ok(())
 }
@@ -81,46 +46,79 @@ fn start_ratatui() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Copy, Clone)]
+enum TuiMode {
+    Normal,
+    Insert,
+}
+
 fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
-    // let mut buf = String::new();
-    // let child_stdin_tx: UnboundedSender<u8> = execute_cmd(child_args, state.clone())?;
-    // let mut main_pane = MainPane::new();
+    let (stdout_tx, stdout_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stderr_tx, stderr_rx) = tokio::sync::mpsc::unbounded_channel();
+    let child_args = get_child_args();
+    let child_stdin_tx = start_child(child_args, stdout_tx, stderr_tx)?;
     let mut lines = vec![String::new()];
     let mut vertical_position = 0usize;
-    // let mut count = 0;
+    let mut current_width = 0u16;
+    let mut current_height = 0u16;
+    let mut mode = TuiMode::Normal;
     loop {
-        // count += 1;
         if event::poll(std::time::Duration::from_millis(60))? {
             let event = crossterm::event::read()?;
             match event {
-                Event::Resize(width, height) => {}
+                Event::Resize(width, height) => {
+                    log::info!(
+                        "Resized from {}x{} to {}x{}",
+                        current_width,
+                        current_height,
+                        width,
+                        height
+                    );
+
+                    current_width = width;
+                    current_height = height;
+                }
+
                 Event::Key(key_event) => match key_event.code {
-                    KeyCode::Backspace => {}
+                    KeyCode::Esc => {
+                        if matches!(mode, TuiMode::Insert) {
+                            mode = TuiMode::Normal;
+                        }
+                    }
+
+                    KeyCode::Backspace => {
+                        if matches!(mode, TuiMode::Insert) {
+                            lines.last_mut().unwrap().pop();
+                        }
+                    }
                     KeyCode::Enter => {
-                        // main_pane.add_line(&buf);
-                        // lines.push(buf.clone());
-                        // buf.clear();
-                        lines.push(String::new());
+                        if matches!(mode, TuiMode::Insert) {
+                            lines.push(String::new());
+                        }
                     }
                     KeyCode::Char(c) => {
-                        if c == 'k' {
-                            // main_pane.scroll_up();
-                            vertical_position += 1;
-                        } else if c == 'j' {
-                            if vertical_position > 0 {
-                                vertical_position -= 1;
-                            }
-                            // main_pane.scroll_down();
+                        match mode {
+                            TuiMode::Normal => match c {
+                                'k' => vertical_position += 1,
+                                'j' => {
+                                    if vertical_position > 0 {
+                                        vertical_position -= 1;
+                                    }
+                                }
+                                'i' => {
+                                    mode = TuiMode::Insert;
+                                }
+                                _ => {}
+                            },
+                            TuiMode::Insert => lines.last_mut().unwrap().push(c),
                         }
-
-                        // buf.push(c);
-                        lines.last_mut().unwrap().push(c);
 
                         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
                                 'c' | 'd' => {
                                     break;
                                 }
+                                'g' => {}
                                 _ => {}
                             }
                         }
@@ -131,11 +129,20 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             };
         }
 
-        // main_pane.add_line(&format!("#{}", count));
-        term.draw(|frame| main_pane_draw(frame, &lines, vertical_position))?;
+        term.draw(|frame| main_pane_draw(frame, &lines, vertical_position, mode))?;
     }
 
     Ok(())
+}
+
+fn get_child_args() -> Vec<String> {
+    let args = std::env::args();
+    let child_args = args.skip(1).collect::<Vec<_>>();
+    if child_args.is_empty() {
+        panic!("No child process mentioned");
+    }
+
+    return child_args;
 }
 
 async fn start_tui() -> anyhow::Result<()> {
@@ -266,23 +273,15 @@ where
     Ok(())
 }
 
-fn execute_cmd(args: Vec<String>, state: Arc<Mutex<State>>) -> anyhow::Result<UnboundedSender<u8>> {
+fn start_child(
+    args: Vec<String>,
+    stdout_sender: UnboundedSender<String>,
+    stderr_sender: UnboundedSender<String>,
+) -> anyhow::Result<UnboundedSender<u8>> {
     use tokio::sync::mpsc;
-    let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-    let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
     let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<u8>();
-    let _child_handle = spawn_child_process(&args, stdout_tx, stderr_tx, stdin_rx)?;
-    tokio::spawn(print_reading_lines(stdout_rx, state));
+    let _child_handle = spawn_child_process(&args, stdout_sender, stderr_sender, stdin_rx)?;
     Ok(stdin_tx)
-}
-
-async fn print_reading_lines(mut receiver: UnboundedReceiver<String>, state: Arc<Mutex<State>>) {
-    while let Some(buf) = receiver.recv().await {
-        if let Err(err) = state.lock().unwrap().add_line(&buf) {
-            eprintln!("can't add line {}", err);
-            break;
-        }
-    }
 }
 
 fn init_logger() {

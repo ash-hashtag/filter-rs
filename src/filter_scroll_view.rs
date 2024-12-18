@@ -9,6 +9,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::TuiMode;
+
 pub struct ScrollView {
     content: String,
     vertical_position: usize,
@@ -39,22 +41,28 @@ impl Widget for ScrollView {
         let visible_lines = &lines[start..end];
 
         for (y, line) in visible_lines.iter().enumerate() {
-            buffer.set_string(0, y as u16, line, Style::new());
+            buffer.set_string(0, area.y + y as u16, line, Style::new());
         }
     }
 }
 
-pub fn main_pane_draw(frame: &mut Frame, lines: &[String], vertical_position: usize) {
-    // let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
-    // let [title_area, main_area, status_area] = vertical.areas(frame.area());
-    let main_area = frame.area();
+pub fn main_pane_draw(
+    frame: &mut Frame,
+    lines: &[String],
+    vertical_position: usize,
+    mode: TuiMode,
+) {
+    let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
+    // let vertical = Layout::vertical([Min(0), Length(1)]);
+    let [title_area, main_area, status_area] = vertical.areas(frame.area());
+    // let main_area = frame.area();
 
     frame.render_widget(
         ScrollView::new(lines.join("\n"), vertical_position),
         main_area,
     );
 
-    // let status = format!("No. of lines {} ", lines.len());
-    // frame.render_widget(Block::bordered().title("Filter"), title_area);
-    // frame.render_widget(Block::bordered().title(status.as_str()), status_area);
+    let status = format!("{:?} No. of lines {} ", mode, lines.len());
+    frame.render_widget(Block::bordered().title("Filter"), title_area);
+    frame.render_widget(Block::bordered().title(status.as_str()), status_area);
 }
