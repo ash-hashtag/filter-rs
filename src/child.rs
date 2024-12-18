@@ -56,10 +56,6 @@ pub fn spawn_child_process(
     })
 }
 
-async fn get_result(mut child: Child) -> std::io::Result<ExitStatus> {
-    child.wait().await
-}
-
 async fn read_lines<T>(reader: T, sender: Sender)
 where
     T: AsyncRead + AsyncReadExt + Unpin,
@@ -68,11 +64,15 @@ where
     loop {
         let mut buf = String::new();
         if let Err(err) = reader.read_line(&mut buf).await {
-            eprintln!("failed to read line from child {}", err);
+            log::error!("failed to read line from child {}", err);
             break;
         } else {
+            if buf.ends_with('\n') {
+                buf.pop();
+            }
+
             if let Err(err) = sender.send(buf) {
-                eprintln!("failed to send line from child {}", err);
+                log::error!("failed to send line from child {}", err);
                 break;
             }
         }
@@ -85,7 +85,7 @@ where
 {
     while let Some(msg) = receiver.recv().await {
         if let Err(err) = writer.write_u8(msg).await {
-            eprintln!("failed to write to stdin of child {}", err);
+            log::error!("failed to write to stdin of child {}", err);
             break;
         }
     }

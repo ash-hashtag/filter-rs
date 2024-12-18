@@ -3,29 +3,16 @@ mod filter_scroll_view;
 mod main_pane;
 mod pages;
 mod rc_str;
-mod scroll_view;
-mod scroll_view_state;
 mod search_pane;
 mod state;
 
-use std::{
-    io::{Stdout, Write},
-    sync::{Arc, Mutex},
-};
+use std::io::{Stdout, Write};
 
-use child::spawn_child_process;
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyModifiers},
-    terminal::{self, disable_raw_mode, enable_raw_mode},
-    QueueableCommand,
-};
+use child::{spawn_child_process, ChildHandle};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use filter_scroll_view::main_pane_draw;
 use ratatui::prelude::CrosstermBackend;
-use state::State;
 use tokio::sync::mpsc::UnboundedSender;
-
-const PREFIX_KEY: char = 'g';
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,14 +21,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub enum TerminalMode {
-    Default,
-    Normal,
-}
-
 fn start_ratatui() -> anyhow::Result<()> {
     let term = ratatui::init();
-    let _ = run_ratatui(term);
+    if let Err(err) = run_ratatui(term) {
+        log::error!("{:?}", err);
+    }
     ratatui::restore();
     Ok(())
 }
@@ -49,19 +33,20 @@ fn start_ratatui() -> anyhow::Result<()> {
 #[derive(Debug, Copy, Clone)]
 enum TuiMode {
     Normal,
-    Insert,
+    Command,
 }
 
 fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
-    let (stdout_tx, stdout_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (stderr_tx, stderr_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stderr_tx, _stderr_rx) = tokio::sync::mpsc::unbounded_channel();
     let child_args = get_child_args();
-    let child_stdin_tx = start_child(child_args, stdout_tx, stderr_tx)?;
-    let mut lines = vec![String::new()];
-    let mut vertical_position = 0usize;
+    let (_child_handle, child_stdin_tx) = start_child(child_args, stdout_tx, stderr_tx)?;
+
     let mut current_width = 0u16;
     let mut current_height = 0u16;
-    let mut mode = TuiMode::Normal;
+
+    let mut state = filter_scroll_view::State::new(0, String::new(), TuiMode::Normal, true);
+
     loop {
         if event::poll(std::time::Duration::from_millis(60))? {
             let event = crossterm::event::read()?;
@@ -81,41 +66,53 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
 
                 Event::Key(key_event) => match key_event.code {
                     KeyCode::Esc => {
-                        if matches!(mode, TuiMode::Insert) {
-                            mode = TuiMode::Normal;
+                        if matches!(state.get_mode(), TuiMode::Command) {
+                            state.set_mode(TuiMode::Normal);
                         }
+                        state.set_auto_scroll(true);
                     }
 
                     KeyCode::Backspace => {
-                        if matches!(mode, TuiMode::Insert) {
-                            lines.last_mut().unwrap().pop();
+                        if matches!(state.get_mode(), TuiMode::Command) {
+                            state.command.pop();
                         }
                     }
                     KeyCode::Enter => {
-                        if matches!(mode, TuiMode::Insert) {
-                            lines.push(String::new());
+                        if matches!(state.get_mode(), TuiMode::Command) {
+                            // execute command
+                            log::info!("Executing command {}", state.command);
+                            state.command.clear();
+                            state.set_mode(TuiMode::Normal);
                         }
                     }
                     KeyCode::Char(c) => {
-                        match mode {
+                        match state.get_mode() {
                             TuiMode::Normal => match c {
-                                'k' => vertical_position += 1,
-                                'j' => {
-                                    if vertical_position > 0 {
-                                        vertical_position -= 1;
+                                'j' => state.go_up(),
+                                'k' => state.go_down(),
+                                '/' => {
+                                    state.set_mode(TuiMode::Command);
+                                    if state.command.is_empty() {
+                                        state.command.push('/');
                                     }
                                 }
-                                'i' => {
-                                    mode = TuiMode::Insert;
+                                _ => {
+                                    child_stdin_tx.send(c as u8)?;
+                                    log::info!("Sending {c} to child process");
                                 }
-                                _ => {}
                             },
-                            TuiMode::Insert => lines.last_mut().unwrap().push(c),
+                            TuiMode::Command => {
+                                state.command.push(c);
+                            }
                         }
 
                         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
-                                'c' | 'd' => {
+                                'c' => {
+                                    state.command.clear();
+                                    state.set_mode(TuiMode::Normal);
+                                }
+                                'd' => {
                                     break;
                                 }
                                 'g' => {}
@@ -129,8 +126,29 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             };
         }
 
-        term.draw(|frame| main_pane_draw(frame, &lines, vertical_position, mode))?;
+        match stdout_rx.try_recv() {
+            Ok(mut s) => {
+                s.push('\n');
+                state.add_content(s.as_str());
+            }
+            Err(err) => match err {
+                tokio::sync::mpsc::error::TryRecvError::Empty => {}
+                tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+                    log::warn!("child stdout disconnected");
+                    break;
+                }
+            },
+        }
+
+        if stdout_rx.is_closed() {
+            log::error!("child stdout closed");
+            break;
+        }
+
+        term.draw(|frame| main_pane_draw(frame, &mut state))?;
     }
+
+    // log::info!("Final lines {:?}", lines);
 
     Ok(())
 }
@@ -145,143 +163,17 @@ fn get_child_args() -> Vec<String> {
     return child_args;
 }
 
-async fn start_tui() -> anyhow::Result<()> {
-    let instant = std::time::Instant::now();
-    let args = std::env::args();
-    let child_args = args.skip(1).collect::<Vec<_>>();
-    if child_args.is_empty() {
-        panic!("No child process mentioned");
-    }
-    let mut stdout = std::io::stdout();
-    enable_raw_mode()?;
-    let start_positon = cursor::position()?;
-    stdout.queue(terminal::EnterAlternateScreen)?;
-    stdout.queue(terminal::Clear(terminal::ClearType::All))?;
-    stdout.queue(cursor::Hide)?;
-    stdout.queue(cursor::MoveToRow(0))?;
-    stdout.flush()?;
-    let _ = tokio::task::spawn_blocking(|| run(child_args)).await;
-    stdout.queue(terminal::LeaveAlternateScreen)?;
-    stdout.queue(cursor::MoveTo(start_positon.0, start_positon.1))?;
-    stdout.queue(cursor::Show)?;
-    disable_raw_mode()?;
-    println!("spent {:?}s", instant.elapsed());
-    Ok(())
-}
-
-fn run(child_args: Vec<String>) -> anyhow::Result<()> {
-    let mut stdout = std::io::stdout();
-    let mut command_mode = false;
-    let state = Arc::new(Mutex::new(State::new()));
-    let mut buf = String::new();
-    let child_stdin_tx: UnboundedSender<u8> = execute_cmd(child_args, state.clone())?;
-    loop {
-        let mut key_consumed = command_mode;
-        if event::poll(std::time::Duration::from_millis(60))? {
-            let event = crossterm::event::read()?;
-
-            match event {
-                Event::Resize(width, height) => {}
-                Event::Key(key_event) => {
-                    match key_event.code {
-                        KeyCode::Backspace => {
-                            if command_mode {
-                                if !buf.is_empty() {
-                                    buf.pop();
-                                    stdout.queue(cursor::MoveLeft(1))?;
-                                    stdout.write(&[' ' as u8])?;
-                                    stdout.queue(cursor::MoveLeft(1))?;
-                                }
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if command_mode {
-                                command_mode = false;
-                                clear_command_prompt(&mut stdout)?;
-
-                                if !buf.is_empty() {
-                                    stdout.queue(cursor::MoveToRow(0))?;
-                                    stdout.queue(cursor::MoveToColumn(0))?;
-                                    println!("\n> {}", buf);
-                                    stdout.queue(cursor::MoveToColumn(0))?;
-                                    let cmd = buf.trim();
-                                    if cmd == "exit" {
-                                        break;
-                                    }
-                                    buf.clear();
-                                }
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if command_mode {
-                                print!("{}", c);
-                                buf.push(c);
-                            } else {
-                                print!("{}", c);
-                            }
-
-                            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                match c {
-                                    'c' | 'd' => {
-                                        // key_consumed = true;
-                                        break;
-                                    }
-                                    PREFIX_KEY => {
-                                        command_mode = true;
-                                        let (_, rows) = terminal::size()?;
-                                        stdout.queue(cursor::MoveToRow(rows))?;
-                                        stdout.queue(cursor::MoveToColumn(0))?;
-                                        print!("command: ");
-                                        key_consumed = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    if !key_consumed {
-                        match key_event.code {
-                            KeyCode::Char(c) => {
-                                child_stdin_tx.send(c as u8)?;
-                            }
-                            KeyCode::Enter => {
-                                child_stdin_tx.send('\n' as u8)?;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            };
-        }
-        stdout.flush()?;
-    }
-
-    Ok(())
-}
-
-fn clear_command_prompt<T>(writer: &mut T) -> anyhow::Result<()>
-where
-    T: std::io::Write,
-{
-    let (rows, _) = terminal::size()?;
-    writer.queue(cursor::MoveToRow(rows))?;
-    writer.queue(cursor::MoveToColumn(0))?;
-    writer.queue(terminal::Clear(terminal::ClearType::CurrentLine))?;
-    Ok(())
-}
-
 fn start_child(
     args: Vec<String>,
     stdout_sender: UnboundedSender<String>,
     stderr_sender: UnboundedSender<String>,
-) -> anyhow::Result<UnboundedSender<u8>> {
+) -> anyhow::Result<(ChildHandle, UnboundedSender<u8>)> {
     use tokio::sync::mpsc;
+    log::info!("Starting child process with args {:?}", args);
     let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<u8>();
-    let _child_handle = spawn_child_process(&args, stdout_sender, stderr_sender, stdin_rx)?;
-    Ok(stdin_tx)
+    let child_handle = spawn_child_process(&args, stdout_sender, stderr_sender, stdin_rx)?;
+
+    Ok((child_handle, stdin_tx))
 }
 
 fn init_logger() {
