@@ -1,4 +1,5 @@
 mod child;
+mod filter_scroll_view;
 mod main_pane;
 mod pages;
 mod rc_str;
@@ -10,7 +11,6 @@ mod state;
 use std::{
     io::{Stdout, Write},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
 
 use child::spawn_child_process;
@@ -20,9 +20,9 @@ use crossterm::{
     terminal::{self, disable_raw_mode, enable_raw_mode},
     QueueableCommand,
 };
-use main_pane::MainPane;
-use pages::{Page, Pages};
-use ratatui::{prelude::CrosstermBackend, text::Span};
+use filter_scroll_view::main_pane_draw;
+use pages::Pages;
+use ratatui::prelude::CrosstermBackend;
 use state::State;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -30,41 +30,42 @@ const PREFIX_KEY: char = 'g';
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut pages = Pages::new(80, 10);
-    let mut s = String::new();
-    use std::fmt::Write;
-    for i in 0..100 {
-        s.clear();
-        for _ in 0..10 {
-            write!(&mut s, "{i}").unwrap();
-        }
-        pages.add_line(&s);
-    }
-
-    // for i in 0..pages.len() {
-    //     println!("{:?}", pages.get_line(i).unwrap());
+    init_logger();
+    // let mut pages = Pages::new(80, 10);
+    // let mut s = String::new();
+    // use std::fmt::Write;
+    // for i in 0..100 {
+    //     s.clear();
+    //     for _ in 0..10 {
+    //         write!(&mut s, "{i}").unwrap();
+    //     }
+    //     pages.add_line(&s);
     // }
 
-    for line in pages.get_lines() {
-        println!("{}", line.s);
-    }
+    // // for i in 0..pages.len() {
+    // //     println!("{:?}", pages.get_line(i).unwrap());
+    // // }
 
-    println!("=======================");
+    // for line in pages.get_lines() {
+    //     println!("{}", line.s);
+    // }
 
-    for line in pages.get_lines().rev() {
-        println!("{}", line.s);
-    }
-    println!("=======================");
+    // println!("=======================");
 
-    let buf = pages.get_lines_per_frame(10, 5);
-    println!("{buf}");
+    // for line in pages.get_lines().rev() {
+    //     println!("{}", line.s);
+    // }
+    // println!("=======================");
+
+    // let buf = pages.get_lines_per_frame(10, 5);
+    // println!("{buf}");
 
     // for i in 0..page.len() {
     //     println!("{:?}", page.get(i).unwrap());
     // }
 
     // println!("width: {}", width);
-    // start_ratatui()?;
+    start_ratatui()?;
     Ok(())
 }
 
@@ -81,12 +82,14 @@ fn start_ratatui() -> anyhow::Result<()> {
 }
 
 fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
-    let mut buf = String::new();
+    // let mut buf = String::new();
     // let child_stdin_tx: UnboundedSender<u8> = execute_cmd(child_args, state.clone())?;
-    let mut main_pane = MainPane::new();
-    let mut count = 0;
+    // let mut main_pane = MainPane::new();
+    let mut lines = vec![String::new()];
+    let mut vertical_position = 0usize;
+    // let mut count = 0;
     loop {
-        count += 1;
+        // count += 1;
         if event::poll(std::time::Duration::from_millis(60))? {
             let event = crossterm::event::read()?;
             match event {
@@ -94,17 +97,24 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                 Event::Key(key_event) => match key_event.code {
                     KeyCode::Backspace => {}
                     KeyCode::Enter => {
-                        main_pane.add_line(&buf);
-                        buf.clear();
+                        // main_pane.add_line(&buf);
+                        // lines.push(buf.clone());
+                        // buf.clear();
+                        lines.push(String::new());
                     }
                     KeyCode::Char(c) => {
                         if c == 'k' {
-                            main_pane.scroll_up();
+                            // main_pane.scroll_up();
+                            vertical_position += 1;
                         } else if c == 'j' {
-                            main_pane.scroll_down();
+                            if vertical_position > 0 {
+                                vertical_position -= 1;
+                            }
+                            // main_pane.scroll_down();
                         }
 
-                        buf.push(c);
+                        // buf.push(c);
+                        lines.last_mut().unwrap().push(c);
 
                         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
@@ -122,7 +132,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
         }
 
         // main_pane.add_line(&format!("#{}", count));
-        term.draw(|frame| main_pane.draw(frame))?;
+        term.draw(|frame| main_pane_draw(frame, &lines, vertical_position))?;
     }
 
     Ok(())
@@ -273,4 +283,27 @@ async fn print_reading_lines(mut receiver: UnboundedReceiver<String>, state: Arc
             break;
         }
     }
+}
+
+fn init_logger() {
+    use log::LevelFilter;
+    use std::fs::File;
+
+    let target = Box::new(File::create("/tmp/filter-log.txt").expect("Can't create file"));
+
+    env_logger::Builder::new()
+        .target(env_logger::Target::Pipe(target))
+        .filter(None, LevelFilter::Debug)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {}:{}] {}",
+                // Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.args()
+            )
+        })
+        .init();
 }
