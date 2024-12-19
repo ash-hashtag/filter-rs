@@ -1,10 +1,10 @@
+#![allow(unused)]
+
 mod child;
 mod main_pane;
 mod pages;
 mod rc_str;
 mod scroll_view;
-mod search_pane;
-mod state;
 
 use std::io::{Stdout, Write};
 
@@ -80,6 +80,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                             app_state.set_mode(TuiMode::Normal);
                             app_state.command.clear();
                             app_state.reset_search();
+                            search_scroll_state.reset_scroll_position();
                         }
                         main_scroll_state.set_auto_scroll(true);
                         search_scroll_state.set_auto_scroll(true);
@@ -89,7 +90,8 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                         if matches!(app_state.get_mode(), TuiMode::Command) {
                             app_state.command.pop();
                             app_state.reset_search();
-                            search_scroll_state.set_max_scroll_offset();
+                            // search_scroll_state.set_max_scroll_offset();
+                            search_scroll_state.reset_scroll_position();
                         }
                     }
                     KeyCode::Enter => {
@@ -133,7 +135,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                             TuiMode::Command => {
                                 app_state.command.push(c);
                                 app_state.reset_search();
-                                // search_scroll_state.set_max_scroll_offset();
+                                search_scroll_state.reset_scroll_position();
                             }
                         }
 

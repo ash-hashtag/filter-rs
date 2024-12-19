@@ -37,6 +37,10 @@ impl ScrollState {
     pub fn set_max_scroll_offset(&mut self) {
         self.scroll_position = 10000000;
     }
+
+    pub fn reset_scroll_position(&mut self) {
+        self.scroll_position = 0;
+    }
 }
 
 pub struct ScrollView<'a> {
@@ -225,13 +229,13 @@ impl<'a> ScrollView<'a> {
 
                     let search_section = &line[index..index + search_str.len()];
 
-                    if search_section.to_lowercase() != search_str {
-                        log::warn!(
-                            "improper search_str hightlighting line: '{}', index: {}",
-                            line,
-                            index
-                        );
-                    }
+                    // if search_section.to_lowercase() != search_str {
+                    // log::warn!(
+                    //     "improper search_str hightlighting line: '{}', index: {}",
+                    //     line,
+                    //     index
+                    // );
+                    // }
 
                     let span = Span::raw(search_section)
                         .bg(ratatui::style::Color::Yellow)
