@@ -1,6 +1,9 @@
 use ratatui::{buffer::Buffer, style::Style, widgets::Widget};
 
-use crate::{pages::Page, TuiMode};
+use crate::{
+    pages::{Page, PageSearchIterator},
+    TuiMode,
+};
 
 pub struct ScrollView<'a> {
     state: &'a mut ScrollViewState,
@@ -16,28 +19,25 @@ impl<'a> ScrollView<'a> {
         let width = area.width;
         let mut vertical_position = self.state.vertical_position;
 
-        if self.state.auto_scroll {
-            vertical_position = self
-                .state
-                .page
-                .len()
-                .checked_sub(height as usize)
-                .unwrap_or(0);
-        }
-        let start = (vertical_position).min(self.state.page.len());
-        let end = (start + height as usize).min(self.state.page.len());
+        let lines = &self.state.page;
 
-        let last_viewed_lines = self.state.page.get_slice(start..end).unwrap();
+        if self.state.auto_scroll {
+            vertical_position = lines.len().checked_sub(height as usize).unwrap_or(0);
+        }
+        let start = (vertical_position).min(lines.len());
+        let end = (start + height as usize).min(lines.len());
         let mut visible_lines = Vec::new();
         let padding = 6;
 
-        for (idx, line) in last_viewed_lines.iter().rev().enumerate() {
-            let lines = textwrap::wrap(line, width as usize - padding);
-            if lines.len() + visible_lines.len() <= height as usize {
+        for idx in (start..end).into_iter().rev() {
+            let wrapped_lines = textwrap::wrap(&lines[idx], width as usize - padding);
+            if wrapped_lines.len() + visible_lines.len() <= height as usize {
                 // visible_lines.extend_from_slice(&lines);
-                let line_number = end - idx;
-                for l in lines.iter().rev() {
-                    visible_lines.push(format!("{:>5} {}", line_number, l));
+                let line_number = idx;
+                for l in wrapped_lines.iter().rev() {
+                    let f_line = format!("{:>5} {}", line_number, l);
+
+                    visible_lines.push(f_line);
                 }
             } else {
                 break;
@@ -45,7 +45,6 @@ impl<'a> ScrollView<'a> {
         }
 
         visible_lines.reverse();
-
         for (y, line) in visible_lines.iter().enumerate() {
             buffer.set_string(0, area.y + y as u16, line, Style::new());
         }
@@ -56,6 +55,56 @@ impl<'a> ScrollView<'a> {
 
         self.state.vertical_position = vertical_position;
     }
+
+    pub fn render_searched_lines(&mut self, area: ratatui::prelude::Rect, buffer: &mut Buffer) {
+        let search_str = &self.state.search_str();
+
+        log::info!("Searching for {search_str}",);
+
+        let iterator = PageSearchIterator::new(&self.state.page, search_str).rev();
+        let lines = iterator.collect::<Vec<_>>();
+
+        // log::info!("Found lines with {search_str} {:?}", lines);
+
+        let height = area.height;
+        let width = area.width;
+        let mut vertical_position = self.state.search_vertical_position;
+
+        if self.state.auto_scroll {
+            vertical_position = lines.len().checked_sub(height as usize).unwrap_or(0);
+        }
+        let start = (vertical_position).min(lines.len());
+        let end = (start + height as usize).min(lines.len());
+
+        let mut visible_lines = Vec::new();
+        let padding = 6;
+        for idx in (start..end).into_iter().rev() {
+            let wrapped_lines = textwrap::wrap(lines[idx].line, width as usize - padding);
+            if wrapped_lines.len() + visible_lines.len() <= height as usize {
+                // visible_lines.extend_from_slice(&lines);
+                let line_number = lines[idx].line_index;
+                for l in wrapped_lines.iter().rev() {
+                    let f_line = format!("{:>5} {}", line_number, l);
+
+                    visible_lines.push(f_line);
+                }
+            } else {
+                break;
+            }
+        }
+
+        // visible_lines.reverse();
+
+        for (y, line) in visible_lines.iter().enumerate() {
+            buffer.set_string(0, area.y + y as u16, line, Style::new());
+        }
+
+        if end == self.state.page.len() {
+            self.state.set_auto_scroll(true);
+        }
+
+        self.state.search_vertical_position = vertical_position;
+    }
 }
 
 impl<'a> Widget for ScrollView<'a> {
@@ -63,37 +112,17 @@ impl<'a> Widget for ScrollView<'a> {
     where
         Self: Sized,
     {
-        // let height = area.height;
-        // let width = area.width;
-
-        // let lines = textwrap::wrap(self.state.get_content(), width as usize);
-        // let mut vertical_position = self.state.vertical_position;
-
-        // if self.state.auto_scroll {
-        //     vertical_position = lines.len().checked_sub(height as usize).unwrap_or(0);
-        // }
-        // let start = (vertical_position).min(lines.len());
-        // let end = (start + height as usize).min(lines.len());
-
-        // let visible_lines = &lines[start..end];
-
-        // for (y, line) in visible_lines.iter().enumerate() {
-        //     let f_line = format!("{:>5} {}", start + y, line,);
-
-        //     buffer.set_string(0, area.y + y as u16, &f_line, Style::new());
-        // }
-
-        // if end == lines.len() {
-        //     self.state.set_auto_scroll(true);
-        // }
-        // self.state.vertical_position = vertical_position;
-        self.render_wrapped_lines(area, buffer);
+        if self.state.is_in_search_mode() {
+            self.render_searched_lines(area, buffer);
+        } else {
+            self.render_wrapped_lines(area, buffer);
+        }
     }
 }
 
 pub struct ScrollViewState {
     vertical_position: usize,
-    content: String,
+    search_vertical_position: usize,
     pub mode: TuiMode,
     pub auto_scroll: bool,
     pub command: String,
@@ -102,19 +131,14 @@ pub struct ScrollViewState {
 }
 
 impl ScrollViewState {
-    pub fn new(
-        vertical_position: usize,
-        content: String,
-        mode: TuiMode,
-        auto_scroll: bool,
-    ) -> Self {
+    pub fn new(page: Page, mode: TuiMode, auto_scroll: bool) -> Self {
         Self {
-            vertical_position,
-            content,
+            vertical_position: 0,
+            search_vertical_position: 0,
             mode,
             auto_scroll,
             command: String::new(),
-            page: Page::new(),
+            page,
             page_view: 0..0,
         }
     }
@@ -127,9 +151,9 @@ impl ScrollViewState {
         self.mode
     }
 
-    pub fn add_content(&mut self, s: &str) {
-        self.content += s;
-    }
+    // pub fn add_content(&mut self, s: &str) {
+    //     self.content += s;
+    // }
 
     pub fn add_line(&mut self, s: &str) {
         self.page.add_line(s);
@@ -140,15 +164,38 @@ impl ScrollViewState {
     // }
 
     pub fn go_up(&mut self) {
-        self.vertical_position += 1;
+        if self.is_in_search_mode() {
+            self.search_vertical_position += 1;
+        } else {
+            self.vertical_position += 1;
+        }
         self.set_auto_scroll(false);
     }
 
     pub fn go_down(&mut self) {
-        if self.vertical_position > 0 {
-            self.vertical_position -= 1;
+        if self.is_in_search_mode() {
+            if self.vertical_position > 0 {
+                self.vertical_position -= 1;
+            }
+        } else {
+            if self.vertical_position > 0 {
+                self.vertical_position -= 1;
+            }
         }
+
         self.set_auto_scroll(false);
+    }
+
+    pub fn is_in_search_mode(&self) -> bool {
+        self.command.len() > 1 && self.command.starts_with("/")
+    }
+
+    pub fn search_str(&self) -> &str {
+        if self.is_in_search_mode() {
+            &self.command[1..]
+        } else {
+            ""
+        }
     }
 
     // pub fn get_auto_scroll(&mut self) -> bool {
@@ -157,28 +204,4 @@ impl ScrollViewState {
     pub fn set_auto_scroll(&mut self, auto_scroll: bool) {
         self.auto_scroll = auto_scroll;
     }
-}
-
-pub struct SearchResultLine<'a> {
-    line: &'a str,
-    substr_start: usize,
-    substr_end: usize,
-}
-
-fn get_searched_lines<'a, 'b>(
-    main_content: &'a str,
-    search_str: &'b str,
-) -> Vec<SearchResultLine<'a>> {
-    let mut lines = Vec::new();
-    for line in main_content.lines() {
-        if let Some(index) = line.find(search_str) {
-            lines.push(SearchResultLine {
-                line,
-                substr_start: index,
-                substr_end: index + search_str.len(),
-            });
-        }
-    }
-
-    lines
 }

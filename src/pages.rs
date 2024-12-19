@@ -259,73 +259,152 @@ impl Index<usize> for Page {
     }
 }
 
-#[allow(unused)]
-fn test_pages() {
-    let mut pages = Pages::new(100, 30);
-    let mut buf = String::new();
-
-    for i in 0..1000 {
-        let s = i.to_string();
-        for _ in 0..1 {
-            buf += s.as_str();
-        }
-        pages.add_line(&buf);
-        buf.clear();
-    }
-
-    // for line in pages.get_lines() {
-    //     println!("{}", line);
-    // }
-
-    // println!("---------------");
-
-    // for line in pages.get_lines().rev() {
-    //     println!("{}", line);
-    // }
-
-    // println!("{:?}", pages.get_pages());
+pub struct PageLineIterator<'a> {
+    page: &'a Page,
+    idx: usize,
 }
 
-// pub fn reformat_line_into_and_get_terminal_width(s: &str, w: &mut impl Write) -> usize {
-//     let mut width = 0;
-//     for c in s.chars() {
-//         match c {
-//             '\t' => {
-//                 w.write_str("    ").unwrap();
-//                 width += 4;
-//             }
-//             '\r' => {
-//                 w.write_char('\r').unwrap();
-//             }
-//             _ => {
-//                 w.write_char(c).unwrap();
-//                 width += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-//             }
+impl<'a> PageLineIterator<'a> {
+    pub fn new(page: &'a Page) -> Self {
+        Self { page, idx: 0 }
+    }
+
+    pub fn current_idx(&self) -> usize {
+        self.idx.checked_sub(1).unwrap_or(0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.page.len()
+    }
+}
+
+impl<'a> Iterator for PageLineIterator<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == self.page.len() {
+            return None;
+        }
+        let item = &self.page[self.idx];
+        self.idx += 1;
+
+        Some(item)
+    }
+}
+
+impl<'a> DoubleEndedIterator for PageLineIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.idx == self.page.len() {
+            return None;
+        }
+        let item = &self.page[self.page.len() - self.idx - 1];
+        self.idx += 1;
+
+        Some(item)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SearchResultLine<'a> {
+    pub line: &'a str,
+    pub line_index: usize,
+    pub substr_start: usize,
+}
+
+pub struct PageSearchIterator<'a> {
+    page_iter: PageLineIterator<'a>,
+    search_str: &'a str,
+}
+
+impl<'a> PageSearchIterator<'a> {
+    pub fn new(page: &'a Page, search_str: &'a str) -> Self {
+        Self {
+            page_iter: PageLineIterator::new(page),
+            search_str,
+        }
+    }
+}
+
+impl<'a> Iterator for PageSearchIterator<'a> {
+    type Item = SearchResultLine<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(item) = self.page_iter.next() {
+            if let Some(substr_start) = item.find(self.search_str) {
+                return Some(SearchResultLine {
+                    line_index: self.page_iter.current_idx(),
+                    line: item,
+                    substr_start,
+                });
+            }
+        }
+
+        return None;
+    }
+}
+impl<'a> DoubleEndedIterator for PageSearchIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        while let Some(item) = self.page_iter.next_back() {
+            if let Some(substr_start) = item.find(self.search_str) {
+                return Some(SearchResultLine {
+                    line_index: self.page_iter.len() - self.page_iter.current_idx() - 1,
+                    line: item,
+                    substr_start,
+                });
+            }
+        }
+        return None;
+    }
+}
+// #[test]
+// fn test_pages() {
+//     let mut pages = Pages::new(100, 30);
+//     let mut buf = String::new();
+
+//     for i in 0..1000 {
+//         let s = i.to_string();
+//         for _ in 0..1 {
+//             buf += s.as_str();
 //         }
+//         pages.add_line(&buf);
+//         buf.clear();
 //     }
 
-//     width
+//     // for line in pages.get_lines() {
+//     //     println!("{}", line);
+//     // }
+
+//     // println!("---------------");
+
+//     // for line in pages.get_lines().rev() {
+//     //     println!("{}", line);
+//     // }
+
+//     // println!("{:?}", pages.get_pages());
 // }
 
-// pub struct TerminalLine {
-//     s: RcStr,
-//     terminal_width: u16,
-// }
+#[test]
+fn test_page_iterator() {
+    let mut page = Page::new();
+    page.add_line("hello world 0");
+    page.add_line(" world hello world 1");
+    page.add_line("world hello world 2");
+    page.add_line("foo hello world 3");
 
-// impl TerminalLine {
-//     pub fn new(s: &str) -> Self {
-//         let mut width = 0;
-//         for c in s.chars() {
-//             width += match c {
-//                 '\t' => 4,
-//                 '\r' => 0,
-//                 _ => unicode_width::UnicodeWidthChar::width(c).unwrap(),
-//             } as u16;
-//         }
+    for line in PageLineIterator::new(&page).rev() {
+        println!("{}", line);
+    }
 
-//         Self {
-//             s: RcStr::from(s),
-//             terminal_width: width,
-//         }
-//     }
-// }
+    let search_str = "hello";
+
+    let iter = PageSearchIterator::new(&page, &search_str);
+    for line in iter {
+        println!("{:?}", line);
+    }
+    println!("=== reverse ===");
+    let iter = PageSearchIterator::new(&page, &search_str).rev();
+    for line in iter {
+        println!("{:?}", line);
+    }
+    panic!("test exit");
+}

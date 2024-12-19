@@ -11,6 +11,7 @@ use std::io::{Stdout, Write};
 use child::{spawn_child_process, ChildHandle};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use main_pane::main_pane_draw;
+use pages::Page;
 use ratatui::prelude::CrosstermBackend;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -45,7 +46,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut current_width = 0u16;
     let mut current_height = 0u16;
 
-    let mut state = scroll_view::ScrollViewState::new(0, String::new(), TuiMode::Normal, true);
+    let mut state = scroll_view::ScrollViewState::new(Page::new(), TuiMode::Normal, true);
 
     loop {
         if event::poll(std::time::Duration::from_millis(60))? {
@@ -130,7 +131,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             Ok(s) => {
                 // s.push('\n');
                 // state.add_content(s.as_str());
-                state.page.add_line(&s);
+                state.add_line(&s);
             }
             Err(err) => match err {
                 tokio::sync::mpsc::error::TryRecvError::Empty => {}
