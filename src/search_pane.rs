@@ -1,6 +1,6 @@
 use ratatui::Frame;
 
-use crate::scroll_view::ScrollViewState;
+use crate::scroll_view::AppState;
 
 // pub struct SearchPane {
 //     search_term: String,
@@ -54,4 +54,4 @@ use crate::scroll_view::ScrollViewState;
 //     }
 // }
 
-pub fn search_pane_draw(frame: &mut Frame, state: &mut ScrollViewState) {}
+pub fn search_pane_draw(frame: &mut Frame, state: &mut AppState) {}

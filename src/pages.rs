@@ -39,10 +39,7 @@
 //     }
 // }
 
-use std::{
-    ops::{Index, Range},
-    slice::SliceIndex,
-};
+use std::ops::{Index, Range};
 
 pub struct Pages {
     pages: Vec<Page>,
@@ -330,7 +327,7 @@ impl<'a> Iterator for PageSearchIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.page_iter.next() {
-            if let Some(substr_start) = item.find(self.search_str) {
+            if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
                 return Some(SearchResultLine {
                     line_index: self.page_iter.current_idx(),
                     line: item,
@@ -345,7 +342,7 @@ impl<'a> Iterator for PageSearchIterator<'a> {
 impl<'a> DoubleEndedIterator for PageSearchIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.page_iter.next_back() {
-            if let Some(substr_start) = item.find(self.search_str) {
+            if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
                 return Some(SearchResultLine {
                     line_index: self.page_iter.len() - self.page_iter.current_idx() - 1,
                     line: item,
@@ -390,6 +387,8 @@ fn test_page_iterator() {
     page.add_line(" world hello world 1");
     page.add_line("world hello world 2");
     page.add_line("foo hello world 3");
+    page.add_line("");
+    page.add_line("");
 
     for line in PageLineIterator::new(&page).rev() {
         println!("{}", line);

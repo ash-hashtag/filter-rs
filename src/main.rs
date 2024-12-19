@@ -13,6 +13,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use main_pane::main_pane_draw;
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
+use scroll_view::ScrollState;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[tokio::main]
@@ -41,12 +42,20 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel();
     let (stderr_tx, _stderr_rx) = tokio::sync::mpsc::unbounded_channel();
     let child_args = get_child_args();
+    let title = child_args.join(" ");
     let (_child_handle, child_stdin_tx) = start_child(child_args, stdout_tx, stderr_tx)?;
 
     let mut current_width = 0u16;
     let mut current_height = 0u16;
 
-    let mut state = scroll_view::ScrollViewState::new(Page::new(), TuiMode::Normal, true);
+    let mut app_state = scroll_view::AppState::new(Page::new(), TuiMode::Normal);
+    let mut main_scroll_state = ScrollState::default();
+    let mut search_scroll_state = ScrollState::default();
+    main_scroll_state.set_auto_scroll(true);
+    search_scroll_state.set_max_scroll_offset();
+    search_scroll_state.set_auto_scroll(true);
+
+    let mut child_exited = false;
 
     loop {
         if event::poll(std::time::Duration::from_millis(60))? {
@@ -67,51 +76,68 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
 
                 Event::Key(key_event) => match key_event.code {
                     KeyCode::Esc => {
-                        if matches!(state.get_mode(), TuiMode::Command) {
-                            state.set_mode(TuiMode::Normal);
+                        if matches!(app_state.get_mode(), TuiMode::Command) {
+                            app_state.set_mode(TuiMode::Normal);
+                            app_state.command.clear();
                         }
-                        state.set_auto_scroll(true);
+                        main_scroll_state.set_auto_scroll(true);
                     }
 
                     KeyCode::Backspace => {
-                        if matches!(state.get_mode(), TuiMode::Command) {
-                            state.command.pop();
+                        if matches!(app_state.get_mode(), TuiMode::Command) {
+                            app_state.command.pop();
+                            search_scroll_state.set_max_scroll_offset();
                         }
                     }
                     KeyCode::Enter => {
-                        if matches!(state.get_mode(), TuiMode::Command) {
-                            // execute command
-                            log::info!("Executing command {}", state.command);
-                            state.command.clear();
-                            state.set_mode(TuiMode::Normal);
+                        if matches!(app_state.get_mode(), TuiMode::Command) {
+                            app_state.set_mode(TuiMode::Normal);
                         }
                     }
                     KeyCode::Char(c) => {
-                        match state.get_mode() {
+                        match app_state.get_mode() {
                             TuiMode::Normal => match c {
-                                'j' => state.go_up(),
-                                'k' => state.go_down(),
-                                '/' => {
-                                    state.set_mode(TuiMode::Command);
-                                    if state.command.is_empty() {
-                                        state.command.push('/');
+                                'n' => {
+                                    app_state.show_line_numbers = !app_state.show_line_numbers;
+                                }
+                                'j' => {
+                                    if app_state.is_in_search_mode() {
+                                        search_scroll_state.go_up();
+                                    } else {
+                                        main_scroll_state.go_up();
+                                    }
+                                }
+                                'k' => {
+                                    if app_state.is_in_search_mode() {
+                                        search_scroll_state.go_down();
+                                    } else {
+                                        main_scroll_state.go_down();
+                                    }
+                                }
+                                '/' | ':' => {
+                                    app_state.set_mode(TuiMode::Command);
+                                    if app_state.command.is_empty() {
+                                        app_state.command.push('/');
                                     }
                                 }
                                 _ => {
-                                    child_stdin_tx.send(c as u8)?;
-                                    log::info!("Sending {c} to child process");
+                                    if !child_exited {
+                                        log::info!("Sending {c} to child process");
+                                        child_stdin_tx.send(c as u8)?;
+                                    }
                                 }
                             },
                             TuiMode::Command => {
-                                state.command.push(c);
+                                app_state.command.push(c);
+                                search_scroll_state.set_max_scroll_offset();
                             }
                         }
 
                         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
                                 'c' => {
-                                    state.command.clear();
-                                    state.set_mode(TuiMode::Normal);
+                                    app_state.command.clear();
+                                    app_state.set_mode(TuiMode::Normal);
                                 }
                                 'q' => {
                                     break;
@@ -127,27 +153,44 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             };
         }
 
-        match stdout_rx.try_recv() {
-            Ok(s) => {
-                // s.push('\n');
-                // state.add_content(s.as_str());
-                state.add_line(&s);
-            }
-            Err(err) => match err {
-                tokio::sync::mpsc::error::TryRecvError::Empty => {}
-                tokio::sync::mpsc::error::TryRecvError::Disconnected => {
-                    log::warn!("child stdout disconnected");
-                    break;
+        if !child_exited {
+            match stdout_rx.try_recv() {
+                Ok(s) => {
+                    app_state.add_line(&s);
                 }
-            },
+                Err(err) => match err {
+                    tokio::sync::mpsc::error::TryRecvError::Empty => {}
+                    tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+                        log::warn!("child stdout disconnected");
+                        child_exited = true;
+                        // break;
+                    }
+                },
+            }
+
+            if stdout_rx.is_closed() {
+                log::error!("child stdout closed");
+                child_exited = true;
+            }
         }
 
-        if stdout_rx.is_closed() {
-            log::error!("child stdout closed");
-            break;
-        }
-
-        term.draw(|frame| main_pane_draw(frame, &mut state))?;
+        term.draw(|frame| {
+            if app_state.is_in_search_mode() {
+                main_pane_draw(
+                    frame,
+                    title.as_str(),
+                    &mut app_state,
+                    &mut search_scroll_state,
+                );
+            } else {
+                main_pane_draw(
+                    frame,
+                    title.as_str(),
+                    &mut app_state,
+                    &mut main_scroll_state,
+                );
+            }
+        })?;
     }
 
     // log::info!("Final lines {:?}", lines);

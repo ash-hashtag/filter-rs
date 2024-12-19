@@ -67,6 +67,11 @@ where
             log::error!("failed to read line from child {}", err);
             break;
         } else {
+            if buf.is_empty() {
+                log::info!("received child stdout eof");
+                break;
+            }
+
             if buf.ends_with('\n') {
                 buf.pop();
             }
