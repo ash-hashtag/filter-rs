@@ -209,9 +209,10 @@ impl Page {
         }
     }
 
-    pub fn add_line(&mut self, s: &str) {
+    pub fn add_line(&mut self, s: &str) -> usize {
         self.indices.push(self.inner.len());
         self.inner.push_str(s);
+        self.len() - 1
     }
 
     pub fn add_str_only_if_in_cap(&mut self, s: &str) -> bool {
@@ -322,17 +323,47 @@ impl<'a> PageSearchIterator<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PageSearchedLine {
+    index: usize,
+    substr_start: usize,
+}
+
+impl PageSearchedLine {
+    pub fn new(index: usize, substr_start: usize) -> Self {
+        Self {
+            index,
+            substr_start,
+        }
+    }
+
+    pub fn as_str<'a, 'b>(&'b self, page: &'a Page) -> &'a str {
+        &page[self.index]
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn substr_start(&self) -> usize {
+        self.substr_start
+    }
+}
+
 impl<'a> Iterator for PageSearchIterator<'a> {
-    type Item = SearchResultLine<'a>;
+    type Item = PageSearchedLine;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.page_iter.next() {
             if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
-                return Some(SearchResultLine {
-                    line_index: self.page_iter.current_idx(),
-                    line: item,
-                    substr_start,
-                });
+                let line_index = self.page_iter.current_idx();
+                // return Some(SearchResultLine {
+                // line_index: self.page_iter.current_idx(),
+                //     line: item,
+                //     substr_start,
+                // });
+
+                return Some(PageSearchedLine::new(line_index, substr_start));
             }
         }
 
@@ -343,11 +374,14 @@ impl<'a> DoubleEndedIterator for PageSearchIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.page_iter.next_back() {
             if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
-                return Some(SearchResultLine {
-                    line_index: self.page_iter.len() - self.page_iter.current_idx() - 1,
-                    line: item,
-                    substr_start,
-                });
+                let line_index = self.page_iter.len() - self.page_iter.current_idx() - 1;
+                // return Some(SearchResultLine {
+                //     line_index: self.page_iter.len() - self.page_iter.current_idx() - 1,
+                //     line: item,
+                //     substr_start,
+                // });
+
+                return Some(PageSearchedLine::new(line_index, substr_start));
             }
         }
         return None;

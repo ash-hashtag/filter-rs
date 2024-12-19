@@ -21,7 +21,7 @@ pub fn main_pane_draw(
     frame.render_widget(title, title_area);
     frame.render_widget(ScrollView::new(app_state, scroll_state), main_area);
     let status = format!(
-        "MODE: {:?}, AUTOSCROLL: {} '/': search ^c: clear search ^q: exit",
+        "mode: {:?}, scroll: {} | n: toggle numbers | '/': search | ^c: clear | ^q: exit",
         app_state.mode, scroll_state.auto_scroll
     );
     frame.render_widget(Block::bordered().title(status.as_str()), status_area);

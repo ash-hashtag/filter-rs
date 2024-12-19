@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use ratatui::{
     buffer::Buffer,
     style::{Style, Stylize},
@@ -8,7 +6,7 @@ use ratatui::{
 };
 
 use crate::{
-    pages::{Page, PageSearchIterator},
+    pages::{Page, PageSearchIterator, PageSearchedLine},
     TuiMode,
 };
 
@@ -120,29 +118,13 @@ impl<'a> ScrollView<'a> {
         let search_str = self.app_state.search_str();
         let mut vertical_position = self.scroll_state.scroll_position;
 
-        log::info!("Searching for {}", search_str);
-
-        // let mut lines = Vec::with_capacity(height as usize);
-        // let iter = PageSearchIterator::new(&self.app_state.page, search_str).rev();
-        // for line in iter {
-        //     lines.push(line);
-
-        //     if lines.len() == lines.capacity() {
-        //         break;
-        //     }
-        // }
-
-        // lines.reverse();
-
-        let lines = PageSearchIterator::new(&self.app_state.page, search_str).collect::<Vec<_>>();
+        let lines = &self.app_state.searched_lines;
 
         if self.scroll_state.auto_scroll {
             vertical_position = lines.len().checked_sub(height as usize).unwrap_or(0);
         }
         let start = (vertical_position).min(lines.len());
         let end = (start + height as usize).min(lines.len());
-
-        let padding = 6;
 
         struct LineToDraw {
             s: String,
@@ -151,19 +133,23 @@ impl<'a> ScrollView<'a> {
         let mut visible_lines = Vec::<LineToDraw>::new();
 
         if self.app_state.show_line_numbers {
+            let padding = 6;
             for idx in (start..end).into_iter().rev() {
                 let line = &lines[idx];
-                let wrapped_lines = textwrap::wrap(&line.line, width as usize - padding);
+
+                let s_line = &line.as_str(&self.app_state.page);
+                let wrapped_lines = textwrap::wrap(s_line, width as usize - padding);
                 if wrapped_lines.len() + visible_lines.len() <= height as usize {
-                    let line_number = line.line_index;
-                    let mut cursor = line.line.len();
+                    let line_number = line.index();
+                    let main_substr_start = line.substr_start();
+                    let mut cursor = s_line.len() + 1;
                     for l in wrapped_lines.iter().rev() {
                         let f_line = format!("{:>5} {}", line_number, l);
                         let mut substr_start = -1isize;
+                        let next_cursor = cursor - l.len() - 1;
 
-                        if line.substr_start < cursor && line.substr_start > cursor - l.len() {
-                            substr_start =
-                                (padding + (line.substr_start - (cursor - l.len()))) as isize;
+                        if main_substr_start < cursor && main_substr_start > next_cursor {
+                            substr_start = (padding + (main_substr_start - next_cursor)) as isize;
                         }
 
                         visible_lines.push(LineToDraw {
@@ -171,7 +157,7 @@ impl<'a> ScrollView<'a> {
                             substr_start,
                         });
 
-                        cursor -= l.len();
+                        cursor = next_cursor;
                     }
                 } else {
                     break;
@@ -180,7 +166,9 @@ impl<'a> ScrollView<'a> {
         } else {
             for idx in (start..end).into_iter().rev() {
                 let line = &lines[idx];
-                let wrapped_lines = textwrap::wrap(&line.line, width as usize);
+                let s_line = &line.as_str(&self.app_state.page);
+                let wrapped_lines = textwrap::wrap(s_line, width as usize);
+                let main_substr_start = line.substr_start();
                 if wrapped_lines.len() + visible_lines.len() <= height as usize {
                     // let line_number = lines[idx].line_index;
 
@@ -199,19 +187,21 @@ impl<'a> ScrollView<'a> {
 
                     */
 
-                    let mut cursor = line.line.len();
+                    let mut cursor = s_line.len() + 1;
                     for l in wrapped_lines.iter().rev() {
                         let mut substr_start = -1isize;
+                        let next_cursor = cursor - l.len() - 1;
 
-                        if line.substr_start < cursor && line.substr_start > cursor - l.len() {
-                            substr_start = (line.substr_start - (cursor - l.len())) as isize;
+                        if main_substr_start < cursor && main_substr_start > next_cursor {
+                            substr_start = (main_substr_start - next_cursor) as isize;
                         }
 
                         visible_lines.push(LineToDraw {
                             s: l.to_string(),
                             substr_start,
                         });
-                        cursor -= l.len();
+
+                        cursor = next_cursor;
                     }
                 } else {
                     break;
@@ -232,7 +222,18 @@ impl<'a> ScrollView<'a> {
                     let mut cursor = 0;
                     buffer.set_span(cursor, area.y + y as u16, &span, width);
                     cursor += span.width() as u16;
-                    let span = Span::raw(&line[index..index + search_str.len()])
+
+                    let search_section = &line[index..index + search_str.len()];
+
+                    if search_section.to_lowercase() != search_str {
+                        log::warn!(
+                            "improper search_str hightlighting line: '{}', index: {}",
+                            line,
+                            index
+                        );
+                    }
+
+                    let span = Span::raw(search_section)
                         .bg(ratatui::style::Color::Yellow)
                         .fg(ratatui::style::Color::Black);
                     buffer.set_span(cursor, area.y + y as u16, &span, width);
@@ -271,11 +272,15 @@ impl<'a> Widget for ScrollView<'a> {
     }
 }
 
+// assuming page to be immutable, we storing indices
+
 pub struct AppState {
     pub mode: TuiMode,
     pub command: String,
     pub page: Page,
     pub show_line_numbers: bool,
+
+    searched_lines: Vec<PageSearchedLine>,
 }
 
 impl AppState {
@@ -285,6 +290,7 @@ impl AppState {
             command: String::new(),
             page,
             show_line_numbers: false,
+            searched_lines: Vec::new(),
         }
     }
 
@@ -297,8 +303,32 @@ impl AppState {
     }
 
     pub fn add_line(&mut self, s: &str) {
-        self.page.add_line(s);
+        let index = self.page.add_line(s);
+        if self.is_in_search_mode() {
+            if let Some(substr_start) = s.to_lowercase().find(self.search_str()) {
+                self.searched_lines
+                    .push(PageSearchedLine::new(index, substr_start));
+            }
+        }
     }
+
+    pub fn reset_search(&mut self) {
+        self.searched_lines.clear();
+        if self.is_in_search_mode() {
+            /*
+                patch work for borrow checker
+                get old vec to prevent another allocation
+                populate it
+                and put it back
+            */
+
+            let mut old_vec = std::mem::replace(&mut self.searched_lines, Vec::new());
+            let iter = PageSearchIterator::new(&self.page, self.search_str());
+            old_vec.extend(iter);
+            let _ = std::mem::replace(&mut self.searched_lines, old_vec);
+        }
+    }
+
     pub fn is_in_search_mode(&self) -> bool {
         self.command.len() > 1 && self.command.starts_with("/")
     }
@@ -310,4 +340,50 @@ impl AppState {
             ""
         }
     }
+}
+
+#[test]
+fn test_string_splitting() {
+    let main_content = "hello korld a b ai take idk man bit by wor bittake idk man bit by bittake idk man bit by bittake idk man bit by bit";
+    let main_content = "hello world a b ai take idk man bit by wor bittake idk man bit by bittake idk man bit by bittake idk man bit by bit";
+    let search_str = "wor";
+    let width = 16;
+    let mut lines = textwrap::wrap(&main_content, width);
+
+    lines.reverse();
+    let mut lines_to_draw = Vec::new();
+    let main_substr_start = main_content.find(search_str).unwrap();
+    let mut cursor = main_content.len() + 1;
+    for line in lines {
+        let mut substr_start = -1;
+
+        let next_cursor = (cursor - line.len()) - 1;
+        if main_substr_start < cursor && main_substr_start > next_cursor {
+            substr_start = (main_substr_start - (next_cursor)) as isize;
+        }
+        cursor = next_cursor;
+
+        lines_to_draw.push((line, substr_start));
+    }
+
+    assert!(cursor == 0);
+
+    for line in lines_to_draw {
+        if line.1 >= 0 {
+            println!(
+                "substr: {} line: {} -> '{}'",
+                line.1,
+                line.0,
+                &line.0[line.1 as usize..line.1 as usize + search_str.len()]
+            );
+
+            assert!(
+                line.0[line.1 as usize..line.1 as usize + search_str.len()].to_lowercase()
+                    == search_str
+            );
+        } else {
+            println!("substr: {} line: {}", line.1, line.0,);
+        }
+    }
+    // panic!("real_index {main_substr_start}, cursor {cursor}");
 }

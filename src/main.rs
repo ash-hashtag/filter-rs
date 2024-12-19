@@ -52,7 +52,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut main_scroll_state = ScrollState::default();
     let mut search_scroll_state = ScrollState::default();
     main_scroll_state.set_auto_scroll(true);
-    search_scroll_state.set_max_scroll_offset();
+    // search_scroll_state.set_max_scroll_offset();
     search_scroll_state.set_auto_scroll(true);
 
     let mut child_exited = false;
@@ -79,13 +79,16 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                         if matches!(app_state.get_mode(), TuiMode::Command) {
                             app_state.set_mode(TuiMode::Normal);
                             app_state.command.clear();
+                            app_state.reset_search();
                         }
                         main_scroll_state.set_auto_scroll(true);
+                        search_scroll_state.set_auto_scroll(true);
                     }
 
                     KeyCode::Backspace => {
                         if matches!(app_state.get_mode(), TuiMode::Command) {
                             app_state.command.pop();
+                            app_state.reset_search();
                             search_scroll_state.set_max_scroll_offset();
                         }
                     }
@@ -129,7 +132,8 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                             },
                             TuiMode::Command => {
                                 app_state.command.push(c);
-                                search_scroll_state.set_max_scroll_offset();
+                                app_state.reset_search();
+                                // search_scroll_state.set_max_scroll_offset();
                             }
                         }
 
