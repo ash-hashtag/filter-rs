@@ -4,7 +4,7 @@
 A simple stdout filtering tool for long running applications
 
 Usage:
- filter <cmd to execute
+ filter cmd arg0 arg1
 
 prefix by default is ctrl+g
 

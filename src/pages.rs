@@ -1,45 +1,48 @@
-use std::{fmt::Write, ops::Deref};
+// pub struct RecycleList<T> {
+//     inner: Vec<T>,
+//     max_capacity: usize,
+//     shrink_to: usize,
+// }
 
-pub struct RecycleList<T> {
-    inner: Vec<T>,
-    max_capacity: usize,
-    shrink_to: usize,
-}
+// impl<T> RecycleList<T> {
+//     pub fn new(shrink_to: usize, max_capacity: usize) -> Self {
+//         assert!(shrink_to < max_capacity);
+//         Self {
+//             inner: Vec::with_capacity(max_capacity),
+//             max_capacity,
+//             shrink_to,
+//         }
+//     }
 
-impl<T> RecycleList<T> {
-    pub fn new(shrink_to: usize, max_capacity: usize) -> Self {
-        assert!(shrink_to < max_capacity);
-        Self {
-            inner: Vec::with_capacity(max_capacity),
-            max_capacity,
-            shrink_to,
-        }
-    }
+//     pub fn push(&mut self, element: T) {
+//         if self.inner.len() >= self.max_capacity {
+//             self.purge();
+//         }
+//         self.inner.push(element);
+//     }
 
-    pub fn push(&mut self, element: T) {
-        if self.inner.len() >= self.max_capacity {
-            self.purge();
-        }
-        self.inner.push(element);
-    }
+//     pub fn purge(&mut self) {
+//         for i in 0..self.shrink_to {
+//             let s = self.inner.pop().unwrap();
+//             let index = self.shrink_to - i - 1;
+//             self.inner[index] = s;
+//         }
+//         self.inner.truncate(self.shrink_to);
+//     }
+// }
 
-    pub fn purge(&mut self) {
-        for i in 0..self.shrink_to {
-            let s = self.inner.pop().unwrap();
-            let index = self.shrink_to - i - 1;
-            self.inner[index] = s;
-        }
-        self.inner.truncate(self.shrink_to);
-    }
-}
+// impl<T> Deref for RecycleList<T> {
+//     type Target = Vec<T>;
 
-impl<T> Deref for RecycleList<T> {
-    type Target = Vec<T>;
+//     fn deref(&self) -> &Self::Target {
+//         &self.inner
+//     }
+// }
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
+use std::{
+    ops::{Index, Range},
+    slice::SliceIndex,
+};
 
 pub struct Pages {
     pages: Vec<Page>,
@@ -79,19 +82,19 @@ impl Pages {
         }
     }
 
-    pub fn get_lines<'a>(&'a self) -> PagesLineIterator<'a> {
+    pub fn get_lines_iter<'a>(&'a self) -> PagesLineIterator<'a> {
         PagesLineIterator {
             pages: self,
             inner_cursor: 0,
         }
     }
 
-    pub fn get_line(&self, idx: usize) -> Option<StrSegment> {
+    pub fn get_line(&self, idx: usize) -> Option<&str> {
         let mut rdx = 0;
 
         for page in &self.pages {
             if rdx + page.len() > idx {
-                return page.get(idx - rdx);
+                return page.get_at(idx - rdx);
             }
 
             rdx += page.len();
@@ -100,7 +103,7 @@ impl Pages {
         return None;
     }
 
-    pub fn len(&self) -> usize {
+    pub fn lines_count(&self) -> usize {
         let mut size = 0;
 
         for page in &self.pages {
@@ -110,36 +113,36 @@ impl Pages {
         size
     }
 
-    pub fn get_lines_per_frame(&self, width: u16, height: u16) -> String {
-        let mut buf = String::with_capacity((width * height) as usize);
+    // pub fn get_lines_per_frame(&self, width: u16, height: u16) -> String {
+    //     let mut buf = String::with_capacity((width * height) as usize);
 
-        let mut height_filled = 0;
-        let mut lines_count = 0;
+    //     let mut height_filled = 0;
+    //     let mut lines_count = 0;
 
-        for line in self.get_lines().rev() {
-            let mut height_this_line_takes = line.terminal_width / width as u32;
-            if line.terminal_width % width as u32 > 0 {
-                height_this_line_takes += 1;
-            }
+    //     for line in self.get_lines().rev() {
+    //         let mut height_this_line_takes = line.terminal_width / width as u32;
+    //         if line.terminal_width % width as u32 > 0 {
+    //             height_this_line_takes += 1;
+    //         }
 
-            height_filled += height_this_line_takes;
-            if height_filled >= height as u32 {
-                break;
-            }
+    //         height_filled += height_this_line_takes;
+    //         if height_filled >= height as u32 {
+    //             break;
+    //         }
 
-            lines_count += 1;
-        }
+    //         lines_count += 1;
+    //     }
 
-        let end_idx = self.len();
-        let start_idx = end_idx - lines_count;
+    //     let end_idx = self.len();
+    //     let start_idx = end_idx - lines_count;
 
-        for i in start_idx..end_idx {
-            buf += self.get_line(i).unwrap().s;
-            buf += "\n";
-        }
+    //     for i in start_idx..end_idx {
+    //         buf += self.get_line(i).unwrap().s;
+    //         buf += "\n";
+    //     }
 
-        buf
-    }
+    //     buf
+    // }
 }
 
 pub struct PagesLineIterator<'a> {
@@ -148,7 +151,7 @@ pub struct PagesLineIterator<'a> {
 }
 
 impl<'a> Iterator for PagesLineIterator<'a> {
-    type Item = StrSegment<'a>;
+    type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
         let s = self.pages.get_line(self.inner_cursor);
@@ -159,13 +162,13 @@ impl<'a> Iterator for PagesLineIterator<'a> {
 
 impl<'a> DoubleEndedIterator for PagesLineIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.inner_cursor == self.pages.len() {
+        if self.inner_cursor == self.pages.lines_count() {
             return None;
         }
 
         let s = self
             .pages
-            .get_line(self.pages.len() - self.inner_cursor - 1);
+            .get_line(self.pages.lines_count() - self.inner_cursor - 1);
 
         self.inner_cursor += 1;
 
@@ -176,22 +179,26 @@ impl<'a> DoubleEndedIterator for PagesLineIterator<'a> {
 #[derive(Default)]
 pub struct Page {
     inner: String,
-    indices: Vec<Segment>,
+    indices: Vec<usize>,
 }
 
-#[derive(Copy, Clone)]
-pub struct Segment {
-    start_position: u32,
-    terminal_width: u32,
-}
+// #[derive(Copy, Clone)]
+// pub struct Segment {
+//     start_position: u32,
+//     terminal_width: u32,
+// }
 
-#[derive(Debug)]
-pub struct StrSegment<'a> {
-    pub terminal_width: u32,
-    pub s: &'a str,
-}
+// #[derive(Debug)]
+// pub struct StrSegment<'a> {
+//     pub terminal_width: u32,
+//     pub s: &'a str,
+// }
 
 impl Page {
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: String::with_capacity(cap),
@@ -201,14 +208,13 @@ impl Page {
 
     pub fn add_str(&mut self, s: &str) {
         for line in s.lines() {
-            let start_position = self.inner.len() as u32;
-            let terminal_width =
-                reformat_line_into_and_get_terminal_width(line, &mut self.inner) as u32;
-            self.indices.push(Segment {
-                start_position,
-                terminal_width,
-            });
+            self.add_line(line);
         }
+    }
+
+    pub fn add_line(&mut self, s: &str) {
+        self.indices.push(self.inner.len());
+        self.inner.push_str(s);
     }
 
     pub fn add_str_only_if_in_cap(&mut self, s: &str) -> bool {
@@ -219,28 +225,37 @@ impl Page {
         return true;
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.indices.len()
     }
 
-    pub fn get(&self, idx: usize) -> Option<StrSegment> {
-        let segment = self.indices.get(idx)?;
-        let start = segment.start_position as usize;
-        let end = self
-            .indices
-            .get(idx + 1)
-            .and_then(|x| Some(x.start_position as usize))
-            .unwrap_or(self.inner.len());
+    pub fn get_at(&self, idx: usize) -> Option<&str> {
+        let start = *self.indices.get(idx)?;
+        let end = *self.indices.get(idx + 1).unwrap_or(&self.inner.len());
+        Some(&self.inner[start..end])
+    }
 
-        Some(StrSegment {
-            terminal_width: segment.terminal_width,
-            s: &self.inner[start..end],
-        })
+    pub fn get_slice(&self, range: Range<usize>) -> Option<Vec<&str>> {
+        let mut slice = Vec::with_capacity(range.len());
+        for i in range {
+            slice.push(self.get_at(i)?);
+        }
+
+        Some(slice)
     }
 
     pub fn clear(&mut self) {
         self.inner.clear();
         self.indices.clear();
+    }
+}
+
+impl Index<usize> for Page {
+    type Output = str;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get_at(index).unwrap()
     }
 }
 
@@ -271,26 +286,26 @@ fn test_pages() {
     // println!("{:?}", pages.get_pages());
 }
 
-pub fn reformat_line_into_and_get_terminal_width(s: &str, w: &mut impl Write) -> usize {
-    let mut width = 0;
-    for c in s.chars() {
-        match c {
-            '\t' => {
-                w.write_str("    ").unwrap();
-                width += 4;
-            }
-            '\r' => {
-                w.write_char('\r').unwrap();
-            }
-            _ => {
-                w.write_char(c).unwrap();
-                width += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            }
-        }
-    }
+// pub fn reformat_line_into_and_get_terminal_width(s: &str, w: &mut impl Write) -> usize {
+//     let mut width = 0;
+//     for c in s.chars() {
+//         match c {
+//             '\t' => {
+//                 w.write_str("    ").unwrap();
+//                 width += 4;
+//             }
+//             '\r' => {
+//                 w.write_char('\r').unwrap();
+//             }
+//             _ => {
+//                 w.write_char(c).unwrap();
+//                 width += unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+//             }
+//         }
+//     }
 
-    width
-}
+//     width
+// }
 
 // pub struct TerminalLine {
 //     s: RcStr,

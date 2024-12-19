@@ -1,4 +1,4 @@
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
