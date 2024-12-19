@@ -122,6 +122,18 @@ impl<'a> ScrollView<'a> {
 
         log::info!("Searching for {}", search_str);
 
+        // let mut lines = Vec::with_capacity(height as usize);
+        // let iter = PageSearchIterator::new(&self.app_state.page, search_str).rev();
+        // for line in iter {
+        //     lines.push(line);
+
+        //     if lines.len() == lines.capacity() {
+        //         break;
+        //     }
+        // }
+
+        // lines.reverse();
+
         let lines = PageSearchIterator::new(&self.app_state.page, search_str).collect::<Vec<_>>();
 
         if self.scroll_state.auto_scroll {
