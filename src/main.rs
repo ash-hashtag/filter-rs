@@ -1,23 +1,24 @@
 #![allow(unused)]
 
-mod child;
 mod main_pane;
+mod new_scroll;
 mod pages;
 mod rc_str;
 mod scroll_view;
+mod sync_child;
 
 use std::io::{Stdout, Write};
 
-use child::{spawn_child_process, ChildHandle};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use main_pane::main_pane_draw;
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
 use scroll_view::ScrollState;
-use tokio::sync::mpsc::UnboundedSender;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+const REDRAW_MILLIS_FRAME_TIME: u64 = 64;
+
+// #[tokio::main]
+fn main() -> anyhow::Result<()> {
     init_logger();
     start_ratatui()?;
     Ok(())
@@ -39,11 +40,17 @@ enum TuiMode {
 }
 
 fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
-    let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (stderr_tx, _stderr_rx) = tokio::sync::mpsc::unbounded_channel();
     let child_args = get_child_args();
     let title = child_args.join(" ");
-    let (_child_handle, child_stdin_tx) = start_child(child_args, stdout_tx, stderr_tx)?;
+
+    // let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel();
+    // let (stderr_tx, _stderr_rx) = tokio::sync::mpsc::unbounded_channel();
+    // let (_child_handle, child_stdin_tx) = start_child(child_args, stdout_tx, stderr_tx)?;
+
+    let (stdout_tx, mut stdout_rx) = std::sync::mpsc::channel();
+    let (child_stdin_tx, child_stdin_rx) = std::sync::mpsc::channel();
+    let _child_handle =
+        sync_child::spawn_child_process(&child_args, Some(stdout_tx), None, Some(child_stdin_rx))?;
 
     let mut current_width = 0u16;
     let mut current_height = 0u16;
@@ -58,7 +65,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut child_exited = false;
 
     loop {
-        if event::poll(std::time::Duration::from_millis(60))? {
+        if event::poll(std::time::Duration::from_millis(REDRAW_MILLIS_FRAME_TIME))? {
             let event = crossterm::event::read()?;
             match event {
                 Event::Resize(width, height) => {
@@ -165,19 +172,32 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                     app_state.add_line(&s);
                 }
                 Err(err) => match err {
-                    tokio::sync::mpsc::error::TryRecvError::Empty => {}
-                    tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+                    std::sync::mpsc::TryRecvError::Empty => {}
+                    std::sync::mpsc::TryRecvError::Disconnected => {
                         log::warn!("child stdout disconnected");
                         child_exited = true;
-                        // break;
                     }
                 },
             }
 
-            if stdout_rx.is_closed() {
-                log::error!("child stdout closed");
-                child_exited = true;
-            }
+            // match stdout_rx.try_recv() {
+            //     Ok(s) => {
+            //         app_state.add_line(&s);
+            //     }
+            //     Err(err) => match err {
+            //         tokio::sync::mpsc::error::TryRecvError::Empty => {}
+            //         tokio::sync::mpsc::error::TryRecvError::Disconnected => {
+            //             log::warn!("child stdout disconnected");
+            //             child_exited = true;
+            //             // break;
+            //         }
+            //     },
+            // }
+
+            // if stdout_rx.is_closed() {
+            //     log::error!("child stdout closed");
+            //     child_exited = true;
+            // }
         }
 
         term.draw(|frame| {
@@ -212,19 +232,6 @@ fn get_child_args() -> Vec<String> {
     }
 
     return child_args;
-}
-
-fn start_child(
-    args: Vec<String>,
-    stdout_sender: UnboundedSender<String>,
-    stderr_sender: UnboundedSender<String>,
-) -> anyhow::Result<(ChildHandle, UnboundedSender<u8>)> {
-    use tokio::sync::mpsc;
-    log::info!("Starting child process with args {:?}", args);
-    let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<u8>();
-    let child_handle = spawn_child_process(&args, stdout_sender, stderr_sender, stdin_rx)?;
-
-    Ok((child_handle, stdin_tx))
 }
 
 fn init_logger() {

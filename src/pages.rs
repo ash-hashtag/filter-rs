@@ -109,37 +109,6 @@ impl Pages {
 
         size
     }
-
-    // pub fn get_lines_per_frame(&self, width: u16, height: u16) -> String {
-    //     let mut buf = String::with_capacity((width * height) as usize);
-
-    //     let mut height_filled = 0;
-    //     let mut lines_count = 0;
-
-    //     for line in self.get_lines().rev() {
-    //         let mut height_this_line_takes = line.terminal_width / width as u32;
-    //         if line.terminal_width % width as u32 > 0 {
-    //             height_this_line_takes += 1;
-    //         }
-
-    //         height_filled += height_this_line_takes;
-    //         if height_filled >= height as u32 {
-    //             break;
-    //         }
-
-    //         lines_count += 1;
-    //     }
-
-    //     let end_idx = self.len();
-    //     let start_idx = end_idx - lines_count;
-
-    //     for i in start_idx..end_idx {
-    //         buf += self.get_line(i).unwrap().s;
-    //         buf += "\n";
-    //     }
-
-    //     buf
-    // }
 }
 
 pub struct PagesLineIterator<'a> {
@@ -173,33 +142,33 @@ impl<'a> DoubleEndedIterator for PagesLineIterator<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Page {
     inner: String,
     indices: Vec<usize>,
 }
 
-// #[derive(Copy, Clone)]
-// pub struct Segment {
-//     start_position: u32,
-//     terminal_width: u32,
-// }
-
-// #[derive(Debug)]
-// pub struct StrSegment<'a> {
-//     pub terminal_width: u32,
-//     pub s: &'a str,
-// }
+const DEFAULT_PAGE_LINE_CAPACITY: usize = 8 * 1024;
+const DEFAULT_PAGE_CAPACITY: usize = 64 * DEFAULT_PAGE_LINE_CAPACITY;
 
 impl Page {
     pub fn new() -> Self {
-        Self::with_capacity(0)
+        Self {
+            inner: String::with_capacity(DEFAULT_PAGE_CAPACITY),
+            indices: Vec::with_capacity(DEFAULT_PAGE_LINE_CAPACITY),
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: String::with_capacity(cap),
             indices: Vec::new(),
+        }
+    }
+    pub fn with_capacities(buffer_cap: usize, lines_cap: usize) -> Self {
+        Self {
+            inner: String::with_capacity(buffer_cap),
+            indices: Vec::with_capacity(lines_cap),
         }
     }
 

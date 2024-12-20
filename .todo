@@ -1,3 +1,4 @@
 lot of code duplication, fix it
 go up or down by each wrapped line instead of entire real line
 regex support
+maybe check if it requires redraw?
