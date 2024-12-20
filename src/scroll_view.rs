@@ -66,9 +66,6 @@ impl<'a> ScrollView<'a> {
         if self.scroll_state.auto_scroll {
             vertical_position = lines.len().checked_sub(height as usize).unwrap_or(0);
         }
-
-        // log::info!("number of lines {}", lines.len());
-
         let start = (vertical_position).min(lines.len());
         let end = (start + height as usize).min(lines.len());
         let mut visible_lines = Vec::<String>::new();
