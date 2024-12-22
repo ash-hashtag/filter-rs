@@ -11,6 +11,7 @@ use std::io::{Stdout, Write};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use main_pane::main_pane_draw;
+use new_scroll::main2;
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
 use scroll_view::ScrollState;
@@ -20,7 +21,8 @@ const REDRAW_MILLIS_FRAME_TIME: u64 = 64;
 // #[tokio::main]
 fn main() -> anyhow::Result<()> {
     init_logger();
-    start_ratatui()?;
+    // start_ratatui()?;
+    main2();
     Ok(())
 }
 

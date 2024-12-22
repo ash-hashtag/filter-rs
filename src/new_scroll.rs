@@ -1,9 +1,12 @@
 use std::{
     collections::LinkedList,
+    io::Write,
     ops::{Index, Range},
     slice::SliceIndex,
 };
 
+use crossterm::QueueableCommand;
+use rand::{Rng, SeedableRng};
 use ratatui::{buffer::Buffer, style::Style};
 
 use crate::pages::{Page, PageLineIterator};
@@ -54,9 +57,9 @@ pub struct PageScrollState {
 impl PageScrollState {
     pub fn get_lines_to_render(&mut self, is_width_changed: bool) {
         let (width, height) = (self.width, self.height);
-        let mut visible_lines = LinkedList::new();
 
         if is_width_changed {
+            let mut visible_lines = LinkedList::new();
             for i in (0..self.page_view.end).into_iter().rev() {
                 self.page_view.start = i;
                 let lines = textwrap::wrap(&self.page[i], width);
@@ -71,51 +74,125 @@ impl PageScrollState {
                     break;
                 }
             }
+
+            self.lines_being_drawn = LinesToRenderAndView {
+                view: (visible_lines.len().saturating_sub(height))..visible_lines.len(),
+                lines: visible_lines,
+            }
         } else {
-            let previous_lines =
+            let mut previous_lines =
                 std::mem::replace(&mut self.lines_being_drawn.lines, LinkedList::new());
 
-            let mut iter = previous_lines.into_iter().rev();
+            let previous_start = previous_lines
+                .front()
+                .and_then(|x| Some(x.idx))
+                .unwrap_or(0);
+            let previous_end = previous_lines
+                .back()
+                .and_then(|x| Some(x.idx))
+                .unwrap_or(self.page_view.end);
 
-            let mut end = self.page_view.end;
-            while let Some(item) = iter.next() {
-                if item.idx <= self.page_view.end {
-                    end = item.idx;
-                    visible_lines.push_front(item);
-                    break;
+            if self.page_view.end > previous_end {
+                /*
+                     0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
+                old_start-^      old_end-^         ^-new_end
+
+                  new_end > old_end
+
+                  calculate old_end to new_end in reverse
+                  append  (old_start to old_end) to  (old_end to new_end)
+
+                 */
+                let mut visible_lines = LinkedList::new();
+
+                println!("pushing from previous end to new end lines until filling height");
+                for i in (previous_end..self.page_view.end).into_iter().rev() {
+                    self.page_view.start = i;
+                    let lines = textwrap::wrap(&self.page[i], width);
+                    for l in lines.iter().rev() {
+                        visible_lines.push_front(LineWithIdx {
+                            idx: i,
+                            line: l.to_string(),
+                        });
+                    }
+                    // if height <= visible_lines.len() {
+                    //     break;
+                    // }
                 }
+
+                let mut visible_end = self.lines_being_drawn.view.end + visible_lines.len();
+                println!("putting previous lines infront of visible lines");
+                previous_lines.append(&mut visible_lines);
+
+                self.lines_being_drawn = LinesToRenderAndView {
+                    view: (visible_end.saturating_sub(height))..visible_end,
+                    lines: previous_lines,
+                };
+
+                return;
+            } else {
+                /*
+                     0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
+                old_start-^      new_end-^         ^-old_end
+
+                  new_end > old_end
+
+                  pop until new_end
+                  keep (old_start to new_end)
+                  calculate from old_start to 0 unil enough lines fill height
+
+                 */
+
+                let mut visible_end = self.lines_being_drawn.view.end - 1;
+
+                println!("popping excess ends");
+                while let Some(item) = previous_lines.pop_back() {
+                    if item.idx == self.page_view.end {
+                        previous_lines.push_back(item);
+                        visible_end += 1;
+                        break;
+                    } else {
+                        if previous_lines.len() < self.lines_being_drawn.view.end {
+                            visible_end -= 1;
+                        }
+                    }
+                }
+
+                println!("pushing front lines until filling height");
+                for i in (0..previous_start).into_iter().rev() {
+                    self.page_view.start = i;
+                    let lines = textwrap::wrap(&self.page[i], width);
+                    for l in lines.iter().rev() {
+                        visible_end += 1;
+                        previous_lines.push_front(LineWithIdx {
+                            idx: i,
+                            line: l.to_string(),
+                        });
+                    }
+                    if height <= previous_lines.len() {
+                        break;
+                    }
+                }
+
+                self.lines_being_drawn = LinesToRenderAndView {
+                    view: (visible_end.saturating_sub(height))..visible_end,
+                    lines: previous_lines,
+                };
+
+                return;
             }
-
-            for i in (0..end).into_iter().rev() {
-                self.page_view.start = i;
-
-                let lines = textwrap::wrap(&self.page[i], width);
-
-                for l in lines.iter().rev() {
-                    visible_lines.push_front(LineWithIdx {
-                        idx: i,
-                        line: l.to_string(),
-                    });
-                }
-                if height <= visible_lines.len() {
-                    break;
-                }
-            }
-        }
-
-        self.lines_being_drawn = LinesToRenderAndView {
-            view: (visible_lines.len().saturating_sub(height))..visible_lines.len(),
-            lines: visible_lines,
         }
     }
 
     /// returns if the instruction requires redraw
     pub fn apply_queue(&mut self, queue: InstructionQueue) -> bool {
         let mut requires_redraw = false;
+        let mut requires_getting_lines = false;
         let mut is_width_changed = false;
         if self.auto_scroll {
             if self.page_view.end != self.page.len() {
                 self.page_view.end = self.page.len();
+                requires_getting_lines = true;
                 requires_redraw = true;
             }
         }
@@ -137,6 +214,7 @@ impl PageScrollState {
                         self.page_view.end += 1;
                         // self.get_lines_to_render(false);
                         requires_redraw = true;
+                        requires_getting_lines = true;
                     }
                 }
             }
@@ -150,6 +228,7 @@ impl PageScrollState {
                         self.page_view.end -= 1;
                         // self.get_lines_to_render(false);
                         requires_redraw = true;
+                        requires_getting_lines = true;
                     }
                 }
             }
@@ -158,11 +237,12 @@ impl PageScrollState {
                 self.width = width;
                 self.height = height;
                 // self.get_lines_to_render(is_width_changed);
+                requires_getting_lines = true;
                 requires_redraw = true;
             }
         }
 
-        if requires_redraw {
+        if requires_getting_lines {
             self.get_lines_to_render(is_width_changed);
         }
 
@@ -188,21 +268,24 @@ impl PageScrollState {
 
 #[test]
 fn test_new_scroll() {
+    use std::fmt::Write;
     let mut state = PageScrollState::default();
     state.auto_scroll = true;
-    let mut buf = String::new();
+    let mut buf = String::with_capacity(512);
 
-    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ    -_.,"
+    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ    "
         .chars()
         .collect::<Vec<_>>();
 
+    let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+
     for i in 0..16 {
-        let len = rand::random::<usize>() % 64;
+        // let len = 8 + rand::random::<usize>() % 32;
+        let len = 8 + rng.gen::<usize>() % 24;
         buf.clear();
 
         for _ in 0..len {
-            let c = chars[rand::random::<usize>() % chars.len()];
-            buf.push(c);
+            write!(&mut buf, "{} ", i);
         }
 
         state.page.add_line(&buf);
@@ -215,98 +298,163 @@ fn test_new_scroll() {
     println!("^^^^^ current lines ^^^^^");
 
     if state.apply_queue(InstructionQueue::Resize {
-        width: 10,
+        width: 20,
         height: 10,
     }) {
-        println!(
-            "--------terminal resize (10x10) -------- real length {}, view {:?}",
-            state.lines_being_drawn.lines.len(),
-            state.lines_being_drawn.view
-        );
-
-        let mut iter = state
-            .lines_being_drawn
-            .lines
-            .iter()
-            .skip(state.lines_being_drawn.view.start)
-            .take(state.lines_being_drawn.view.len());
-        for line in iter {
-            print!("{:>4}: {}\n", line.idx, line.line);
-        }
-
-        println!("------------------------");
+        display(&state);
     }
 
     state.auto_scroll = false;
 
-    // state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    state.apply_queue(InstructionQueue::Down);
-    if state.apply_queue(InstructionQueue::Down) {
-        println!(
-            "--------terminal (downx9)-------- real length {}, view {:?}",
-            state.lines_being_drawn.lines.len(),
-            state.lines_being_drawn.view
-        );
-
-        let mut iter = state
-            .lines_being_drawn
-            .lines
-            .iter()
-            .skip(state.lines_being_drawn.view.start)
-            .take(state.lines_being_drawn.view.len());
-        for line in iter {
-            print!("{:>4}: {}\n", line.idx, line.line);
+    println!("Going down");
+    for i in 0..9 {
+        if state.apply_queue(InstructionQueue::Down) {
+            display(&state);
         }
-        println!("------------------------");
     }
-    if state.apply_queue(InstructionQueue::Resize {
-        width: 15,
-        height: 5,
-    }) {
-        println!(
-            "--------terminal resize(15x5)-------- real length {}, view {:?}",
-            state.lines_being_drawn.lines.len(),
-            state.lines_being_drawn.view
-        );
 
-        let mut iter = state
-            .lines_being_drawn
-            .lines
-            .iter()
-            .skip(state.lines_being_drawn.view.start)
-            .take(state.lines_being_drawn.view.len());
-        for line in iter {
-            print!("{:>4}: {}\n", line.idx, line.line);
+    println!("Going Up");
+    for i in 0..5 {
+        if state.apply_queue(InstructionQueue::Up) {
+            display(&state);
         }
-        println!("------------------------");
     }
 
     state.auto_scroll = true;
+    println!("Autoscroll");
     if state.apply_queue(InstructionQueue::None) {
-        println!(
-            "--------terminal (autoscroll)-------- real length {}, view {:?}",
-            state.lines_being_drawn.lines.len(),
-            state.lines_being_drawn.view
-        );
-
-        let mut iter = state
-            .lines_being_drawn
-            .lines
-            .iter()
-            .skip(state.lines_being_drawn.view.start)
-            .take(state.lines_being_drawn.view.len());
-        for line in iter {
-            print!("{:>4}: {}\n", line.idx, line.line);
-        }
-        println!("------------------------");
+        display(&state);
     }
 
     panic!();
 }
+
+fn display(state: &PageScrollState) {
+    print!(
+        "--------terminal (autoscroll:{}, size:{}x{})-------- real length {}, view {:?}, page_view: {:?}\n",
+        state.auto_scroll,
+        state.width,
+        state.height,
+        state.lines_being_drawn.lines.len(),
+        state.lines_being_drawn.view,
+        state.page_view,
+    );
+    println!("------------------------------------------------------------------------------------------------");
+    let mut printed_start = false;
+    let mut printed_end = false;
+    for (idx, line) in state.lines_being_drawn.lines.iter().enumerate() {
+        if state.lines_being_drawn.view.start == idx && !printed_start {
+            print!("-----------start-------------\n");
+            printed_start = true;
+        }
+        if state.lines_being_drawn.view.end == idx && !printed_end {
+            print!("-----------end-------------\n");
+            printed_end = true;
+        }
+        print!("{:>4}: {}\n", line.idx, line.line);
+    }
+    println!("------------------------------------------------------------------------------------------------");
+}
+
+pub fn main2() {
+    // use crossterm::terminal;
+    // let mut stdout = std::io::stdout();
+    // terminal::enable_raw_mode().unwrap();
+    // stdout.queue(terminal::EnterAlternateScreen).unwrap();
+    // let _ = new_scroll_page();
+
+    // stdout.queue(terminal::LeaveAlternateScreen).unwrap();
+    // terminal::disable_raw_mode().unwrap();
+}
+
+// fn new_scroll_page() -> anyhow::Result<()> {
+//     use crossterm::cursor;
+//     use crossterm::terminal;
+
+//     use std::fmt::Write;
+//     use std::time::Duration;
+//     let mut stdout = std::io::stdout();
+//     let mut state = PageScrollState::default();
+
+//     let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+
+//     let mut buf = String::new();
+//     for i in 0..16 {
+//         // let len = 8 + rand::random::<usize>() % 32;
+//         let len = 8 + rng.gen::<usize>() % 32;
+//         buf.clear();
+
+//         for _ in 0..len {
+//             write!(&mut buf, "{} ", i);
+//         }
+
+//         state.page.add_line(&buf);
+//     }
+
+//     state.auto_scroll = true;
+//     state.apply_queue(InstructionQueue::Resize {
+//         width: 20,
+//         height: 10,
+//     });
+
+//     while let Ok(has_event) = crossterm::event::poll(Duration::from_millis(60)) {
+//         if !has_event {
+//             continue;
+//         }
+//         let event = crossterm::event::read()?;
+//         let mut queue = InstructionQueue::None;
+//         match event {
+//             crossterm::event::Event::Key(key) => {
+//                 match key.code {
+//                     crossterm::event::KeyCode::Char(c) => match c {
+//                         'j' => {
+//                             queue = InstructionQueue::Down;
+//                         }
+//                         'k' => {
+//                             queue = InstructionQueue::Up;
+//                         }
+//                         'a' => {
+//                             state.auto_scroll = !state.auto_scroll;
+//                         }
+//                         'q' => {
+//                             break;
+//                         }
+//                         _ => {}
+//                     },
+//                     _ => {}
+//                 };
+//             }
+//             crossterm::event::Event::Resize(_, _) => {}
+//             _ => {}
+//         }
+
+//         if state.apply_queue(queue) {
+//             stdout.queue(terminal::Clear(terminal::ClearType::All))?;
+//             stdout.queue(cursor::MoveTo(0, 0))?;
+//             let mut y = 0;
+
+//             for item in state.lines_being_drawn.lines.iter()
+//             // .skip(state.lines_being_drawn.view.start)
+//             // .take(state.lines_being_drawn.view.len())
+//             {
+//                 if state.lines_being_drawn.view.start == item.idx {
+//                     stdout.queue(cursor::MoveTo(0, y as u16))?;
+//                     y += 1;
+//                     write!(stdout, "-----------start-------------");
+//                 }
+//                 if state.lines_being_drawn.view.end == item.idx {
+//                     stdout.queue(cursor::MoveTo(0, y as u16))?;
+//                     y += 1;
+//                     write!(stdout, "-----------end-------------");
+//                 }
+//                 stdout.queue(cursor::MoveTo(0, y as u16))?;
+//                 write!(stdout, "{:>5}: {}", item.idx, item.line)?;
+//                 y += 1;
+//             }
+//         }
+
+//         stdout.flush()?;
+//     }
+
+//     Ok(())
+// }
