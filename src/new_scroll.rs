@@ -55,44 +55,44 @@ pub struct PageScrollState {
 }
 
 impl PageScrollState {
-    pub fn get_lines_to_render(&mut self, is_width_changed: bool) {
+    /// returns if the instruction requires redraw    
+    pub fn apply_queue(&mut self, queue: InstructionQueue) -> bool {
+        let mut requires_redraw = false;
         let (width, height) = (self.width, self.height);
 
-        if is_width_changed {
-            let mut visible_lines = LinkedList::new();
-            for i in (0..self.page_view.end).into_iter().rev() {
-                self.page_view.start = i;
-                let lines = textwrap::wrap(&self.page[i], width);
+        let mut previous_lines = &mut self.lines_being_drawn.lines;
+        // std::mem::replace(&mut self.lines_being_drawn.lines, LinkedList::new());
 
-                for l in lines.iter().rev() {
-                    visible_lines.push_front(LineWithIdx {
-                        idx: i,
-                        line: l.to_string(),
-                    });
-                }
-                if height <= visible_lines.len() {
-                    break;
-                }
+        let previous_start = previous_lines
+            .front()
+            .and_then(|x| Some(x.idx))
+            .unwrap_or(0);
+        let previous_end = previous_lines
+            .back()
+            .and_then(|x| Some(x.idx))
+            .unwrap_or(self.page_view.end);
+
+        if self.auto_scroll {
+            if self.page_view.end != self.page.len() {
+                self.page_view.end = self.page.len();
+                requires_redraw = true;
             }
+        }
+        match queue {
+            InstructionQueue::None => {}
+            InstructionQueue::Up => {
+                if self.lines_being_drawn.view.end < previous_lines.len() {
+                    self.lines_being_drawn.view.start += 1;
+                    self.lines_being_drawn.view.end += 1;
+                    return requires_redraw;
+                }
+                if self.page.len() > self.page_view.end {
+                    // self.page_view.start += 1;
+                    self.page_view.end += 1;
+                    // self.get_lines_to_render(false);
+                    requires_redraw = true;
+                }
 
-            self.lines_being_drawn = LinesToRenderAndView {
-                view: (visible_lines.len().saturating_sub(height))..visible_lines.len(),
-                lines: visible_lines,
-            }
-        } else {
-            let mut previous_lines =
-                std::mem::replace(&mut self.lines_being_drawn.lines, LinkedList::new());
-
-            let previous_start = previous_lines
-                .front()
-                .and_then(|x| Some(x.idx))
-                .unwrap_or(0);
-            let previous_end = previous_lines
-                .back()
-                .and_then(|x| Some(x.idx))
-                .unwrap_or(self.page_view.end);
-
-            if self.page_view.end > previous_end {
                 /*
                      0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
                 old_start-^      old_end-^         ^-new_end
@@ -124,13 +124,28 @@ impl PageScrollState {
                 println!("putting previous lines infront of visible lines");
                 previous_lines.append(&mut visible_lines);
 
-                self.lines_being_drawn = LinesToRenderAndView {
-                    view: (visible_end.saturating_sub(height))..visible_end,
-                    lines: previous_lines,
-                };
+                self.lines_being_drawn.view = (visible_end.saturating_sub(height))..visible_end;
+                // self.lines_being_drawn = LinesToRenderAndView {
+                //     view: ,
+                //     lines: previous_lines,
+                // };
+            }
+            InstructionQueue::Down => {
+                if self.lines_being_drawn.view.start > 0 {
+                    self.lines_being_drawn.view.start -= 1;
+                    self.lines_being_drawn.view.end -= 1;
+                    requires_redraw = true;
+                    return requires_redraw;
+                }
+                if self.page_view.start > 0 {
+                    // self.page_view.end -= 1;
+                    self.page_view.start -= 1;
+                    // self.get_lines_to_render(false);
+                    requires_redraw = true;
+                } else {
+                    return requires_redraw;
+                }
 
-                return;
-            } else {
                 /*
                      0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
                 old_start-^      new_end-^         ^-old_end
@@ -145,18 +160,7 @@ impl PageScrollState {
 
                 let mut visible_end = self.lines_being_drawn.view.end - 1;
 
-                println!("popping excess ends");
-                while let Some(item) = previous_lines.pop_back() {
-                    if item.idx == self.page_view.end {
-                        previous_lines.push_back(item);
-                        visible_end += 1;
-                        break;
-                    } else {
-                        if previous_lines.len() < self.lines_being_drawn.view.end {
-                            visible_end -= 1;
-                        }
-                    }
-                }
+                assert!(previous_start == self.page_view.start + 1);
 
                 println!("pushing front lines until filling height");
                 for i in (0..previous_start).into_iter().rev() {
@@ -174,80 +178,127 @@ impl PageScrollState {
                     }
                 }
 
-                self.lines_being_drawn = LinesToRenderAndView {
-                    view: (visible_end.saturating_sub(height))..visible_end,
-                    lines: previous_lines,
-                };
+                if let Some(last_visible_item) = previous_lines
+                    .iter()
+                    .rev()
+                    .nth(previous_lines.len() - visible_end)
+                {
+                    let idx = last_visible_item.idx;
+                    println!(
+                        "popping excess ends after {} and line {}",
+                        idx, last_visible_item.line
+                    );
 
-                return;
-            }
-        }
-    }
-
-    /// returns if the instruction requires redraw
-    pub fn apply_queue(&mut self, queue: InstructionQueue) -> bool {
-        let mut requires_redraw = false;
-        let mut requires_getting_lines = false;
-        let mut is_width_changed = false;
-        if self.auto_scroll {
-            if self.page_view.end != self.page.len() {
-                self.page_view.end = self.page.len();
-                requires_getting_lines = true;
-                requires_redraw = true;
-            }
-        }
-
-        match queue {
-            InstructionQueue::None => {
-                // if requires_redraw {
-                //     self.get_lines_to_render(false);
-                // }
-            }
-            InstructionQueue::Up => {
-                if self.lines_being_drawn.view.end < self.lines_being_drawn.lines.len() {
-                    self.lines_being_drawn.view.start += 1;
-                    self.lines_being_drawn.view.end += 1;
-                    requires_redraw = true;
-                } else {
-                    if self.page.len() > self.page_view.end {
-                        // self.page_view.start += 1;
-                        self.page_view.end += 1;
-                        // self.get_lines_to_render(false);
-                        requires_redraw = true;
-                        requires_getting_lines = true;
+                    while let Some(item) = previous_lines.pop_back() {
+                        self.page_view.end = idx;
+                        if item.idx <= idx {
+                            previous_lines.push_back(item);
+                            break;
+                        }
                     }
                 }
-            }
-            InstructionQueue::Down => {
-                if self.lines_being_drawn.view.start > 0 {
-                    self.lines_being_drawn.view.start -= 1;
-                    self.lines_being_drawn.view.end -= 1;
-                    requires_redraw = true;
-                } else {
-                    if self.page_view.start > 0 && self.page_view.end > 0 {
-                        self.page_view.end -= 1;
-                        // self.get_lines_to_render(false);
-                        requires_redraw = true;
-                        requires_getting_lines = true;
-                    }
-                }
+
+                self.lines_being_drawn.view = (visible_end.saturating_sub(height))..visible_end;
             }
             InstructionQueue::Resize { width, height } => {
-                is_width_changed = self.width != width;
+                let is_width_changed = width != self.width;
                 self.width = width;
                 self.height = height;
-                // self.get_lines_to_render(is_width_changed);
-                requires_getting_lines = true;
+
+                let mut visible_lines = previous_lines;
+                // std::mem::replace(&mut self.lines_being_drawn.lines, LinkedList::new());
+                if is_width_changed {
+                    visible_lines.clear();
+
+                    for i in (0..self.page_view.end).into_iter().rev() {
+                        self.page_view.start = i;
+                        let lines = textwrap::wrap(&self.page[i], width);
+
+                        for l in lines.iter().rev() {
+                            visible_lines.push_front(LineWithIdx {
+                                idx: i,
+                                line: l.to_string(),
+                            });
+                        }
+                        if height <= visible_lines.len() {
+                            break;
+                        }
+                    }
+                }
+                self.lines_being_drawn.view =
+                    (visible_lines.len().saturating_sub(height))..visible_lines.len();
+
                 requires_redraw = true;
             }
-        }
+        };
 
-        if requires_getting_lines {
-            self.get_lines_to_render(is_width_changed);
-        }
-
-        requires_redraw
+        return requires_redraw;
     }
+
+    // pub fn apply_queue(&mut self, queue: InstructionQueue) -> bool {
+    //     let mut requires_redraw = false;
+    //     let mut requires_getting_lines = false;
+    //     let mut is_width_changed = false;
+    //     if self.auto_scroll {
+    //         if self.page_view.end != self.page.len() {
+    //             self.page_view.end = self.page.len();
+    //             requires_getting_lines = true;
+    //             requires_redraw = true;
+    //         }
+    //     }
+
+    //     match queue {
+    //         InstructionQueue::None => {
+    //             // if requires_redraw {
+    //             //     self.get_lines_to_render(false);
+    //             // }
+    //         }
+    //         InstructionQueue::Up => {
+    //             // if self.lines_being_drawn.view.end < self.lines_being_drawn.lines.len() {
+    //             //     self.lines_being_drawn.view.start += 1;
+    //             //     self.lines_being_drawn.view.end += 1;
+    //             //     requires_redraw = true;
+    //             // } else {
+    //             //     if self.page.len() > self.page_view.end {
+    //             //         // self.page_view.start += 1;
+    //             //         self.page_view.end += 1;
+    //             //         // self.get_lines_to_render(false);
+    //             //         requires_redraw = true;
+    //             //         requires_getting_lines = true;
+    //             //     }
+    //             // }
+    //         }
+    //         InstructionQueue::Down => {
+    //             // if self.lines_being_drawn.view.start > 0 {
+    //             //     self.lines_being_drawn.view.start -= 1;
+    //             //     self.lines_being_drawn.view.end -= 1;
+    //             //     requires_redraw = true;
+    //             // } else {
+    //             //     if self.page_view.start > 0 && self.page_view.end > 0 {
+    //             //         // self.page_view.end -= 1;
+    //             //         self.page_view.start -= 1;
+    //             //         // self.get_lines_to_render(false);
+    //             //         requires_redraw = true;
+    //             //         requires_getting_lines = true;
+    //             //     }
+    //             // }
+    //         }
+    //         InstructionQueue::Resize { width, height } => {
+    //             is_width_changed = self.width != width;
+    //             self.width = width;
+    //             self.height = height;
+    //             // self.get_lines_to_render(is_width_changed);
+    //             requires_getting_lines = true;
+    //             requires_redraw = true;
+    //         }
+    //     }
+
+    //     if requires_getting_lines {
+    //         // self.get_lines_to_render(is_width_changed);
+    //     }
+
+    //     requires_redraw
+    // }
 
     // pub fn draw(&mut self, area: ratatui::prelude::Rect, buffer: &mut Buffer) {
     //     let height = area.height;
@@ -307,9 +358,12 @@ fn test_new_scroll() {
     state.auto_scroll = false;
 
     println!("Going down");
-    for i in 0..9 {
+    loop {
         if state.apply_queue(InstructionQueue::Down) {
             display(&state);
+        } else {
+            println!("Required no redraw");
+            break;
         }
     }
 
