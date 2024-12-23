@@ -8,5 +8,5 @@ for ((j=0; j<1000; j+=1)); do
   done
 
   echo "$result"
-  # sleep 0.05;
+  sleep 0.5;
 done

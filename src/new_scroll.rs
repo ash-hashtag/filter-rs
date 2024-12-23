@@ -371,6 +371,7 @@ impl<'a> Widget for PageScrollWidget<'a> {
             // move this allocation into ::resize, why keep track of them separetely, if it requires recomputation anyway
 
             let mut last_idx = 0;
+            let mut string_buf = String::with_capacity(padding);
             for (y, line) in self.state.view().enumerate() {
                 if last_idx == line.idx {
                     // let s = format!("{:>6} {}", ' ', line.line);
@@ -378,7 +379,18 @@ impl<'a> Widget for PageScrollWidget<'a> {
                     buf.set_string(padding as u16, area.y + y as u16, &s, Style::new());
                 } else {
                     // let s = format!("{:>5} {}", line.idx, line.line);
-                    buf.set_string(0, area.y + y as u16, &line.idx.to_string(), Style::new());
+                    use std::fmt::Write;
+                    string_buf.clear();
+                    write!(string_buf, "{}", line.idx);
+
+                    let number_padding = (padding - 1).saturating_sub(string_buf.len());
+
+                    buf.set_string(
+                        number_padding as u16,
+                        area.y + y as u16,
+                        &string_buf,
+                        Style::new(),
+                    );
                     buf.set_string(padding as u16, area.y + y as u16, &line.line, Style::new());
                 };
                 last_idx = line.idx;

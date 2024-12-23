@@ -10,11 +10,12 @@ mod sync_child;
 
 use std::{
     io::{Stdout, Write},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
+use command::{CommandBuilder, CommandType};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use main_pane::{main_pane_draw, main_pane_with_page_scroll_draw};
+use main_pane::{draw_space_menu, main_pane_draw, main_pane_with_page_scroll_draw};
 use new_scroll::{main2, PageScrollState};
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
@@ -44,13 +45,29 @@ enum TuiMode {
     Command,
 }
 
+pub struct ErrorTimer {
+    error: String,
+    start: Instant,
+}
+
+impl ErrorTimer {
+    pub fn check(&mut self, duration: Duration) {
+        if self.start.elapsed() > duration {
+            self.error.clear();
+        }
+    }
+
+    pub fn new(error: impl Into<String>) -> Self {
+        Self {
+            error: String::new(),
+            start: Instant::now(),
+        }
+    }
+}
+
 fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow::Result<()> {
     let child_args = get_child_args();
     let title = child_args.join(" ");
-
-    // let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel();
-    // let (stderr_tx, _stderr_rx) = tokio::sync::mpsc::unbounded_channel();
-    // let (_child_handle, child_stdin_tx) = start_child(child_args, stdout_tx, stderr_tx)?;
 
     let (stdout_tx, mut stdout_rx) = std::sync::mpsc::channel();
     let (child_stdin_tx, child_stdin_rx) = std::sync::mpsc::channel();
@@ -65,17 +82,16 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut page_scroll_state = PageScrollState::default();
     page_scroll_state.auto_scroll = true;
 
-    // let mut app_state = scroll_view::AppState::new(Page::new(), TuiMode::Normal);
-    // let mut main_scroll_state = ScrollState::default();
-    // let mut search_scroll_state = ScrollState::default();
-    // main_scroll_state.set_auto_scroll(true);
-    // search_scroll_state.set_max_scroll_offset();
-    // search_scroll_state.set_auto_scroll(true);
-
     let mut child_exited = false;
+    let mut is_space_toggled = false;
+    let mut cmd_builder = CommandBuilder::default();
+    let mut error_timer = ErrorTimer::new("ERROR: Child exited");
 
     loop {
-        if event::poll(std::time::Duration::from_millis(REDRAW_MILLIS_FRAME_TIME))? {
+        let poll_duration = Duration::from_millis(REDRAW_MILLIS_FRAME_TIME);
+        error_timer.check(Duration::from_secs(5));
+
+        if event::poll(poll_duration)? {
             let event = crossterm::event::read()?;
             match event {
                 Event::Resize(width, height) => {
@@ -93,84 +109,85 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
 
                 Event::Key(key_event) => match key_event.code {
                     KeyCode::Esc => {
-                        // if matches!(app_state.get_mode(), TuiMode::Command) {
-                        //     app_state.set_mode(TuiMode::Normal);
-                        //     app_state.command.clear();
-                        //     app_state.reset_search();
-                        //     search_scroll_state.reset_scroll_position();
-                        // }
-                        // main_scroll_state.set_auto_scroll(true);
-                        // search_scroll_state.set_auto_scroll(true);
                         page_scroll_state.auto_scroll = true;
+                        is_space_toggled = false;
+                        cmd_builder.clear();
                     }
 
                     KeyCode::Backspace => {
-                        // if matches!(app_state.get_mode(), TuiMode::Command) {
-                        //     app_state.command.pop();
-                        //     app_state.reset_search();
-                        // search_scroll_state.set_max_scroll_offset();
-                        // search_scroll_state.reset_scroll_position();
-                        // }
+                        if !matches!(cmd_builder.cmd_type, CommandType::None) {
+                            cmd_builder.cmd.pop();
+                        }
                     }
                     KeyCode::Enter => {
-                        // if matches!(app_state.get_mode(), TuiMode::Command) {
-                        //     app_state.set_mode(TuiMode::Normal);
-                        // }
+                        log::info!("Applied command {:?}", cmd_builder);
+                        cmd_builder.clear();
                     }
                     KeyCode::Char(c) => {
-                        // match app_state.get_mode() {
-                        //     TuiMode::Normal =>
-                        match c {
-                            'n' => {
-                                // app_state.show_line_numbers = !app_state.show_line_numbers;
-                                page_scroll_state.show_line_numbers =
-                                    !page_scroll_state.show_line_numbers;
-                            }
-
-                            'j' => {
-                                page_scroll_state.auto_scroll = false;
-                                page_scroll_state.apply_queue(new_scroll::InstructionQueue::Up);
-                                // if app_state.is_in_search_mode() {
-                                //     search_scroll_state.go_up();
-                                // } else {
-                                //     main_scroll_state.go_up();
-                                // }
-                            }
-                            'k' => {
-                                page_scroll_state.auto_scroll = false;
-                                page_scroll_state.apply_queue(new_scroll::InstructionQueue::Down);
-                                // if app_state.is_in_search_mode() {
-                                //     search_scroll_state.go_down();
-                                // } else {
-                                //     main_scroll_state.go_down();
-                                // }
-                            }
-                            '/' | ':' => {
-                                // app_state.set_mode(TuiMode::Command);
-                                // if app_state.command.is_empty() {
-                                //     app_state.command.push('/');
-                                // }
-                            }
-                            _ => {
-                                if !child_exited {
-                                    log::info!("Sending {c} to child process");
-                                    child_stdin_tx.send(c as u8)?;
+                        if !matches!(cmd_builder.cmd_type, CommandType::None) {
+                            cmd_builder.cmd.push(c);
+                        } else {
+                            if is_space_toggled {
+                                match c {
+                                    's' => {
+                                        is_space_toggled = false;
+                                        cmd_builder.cmd_type = CommandType::Search;
+                                    }
+                                    'r' => {
+                                        is_space_toggled = false;
+                                        cmd_builder.cmd_type = CommandType::Regex;
+                                    }
+                                    'i' => {
+                                        is_space_toggled = false;
+                                        cmd_builder.cmd_type = CommandType::Ignore;
+                                    }
+                                    ':' => {
+                                        is_space_toggled = false;
+                                        cmd_builder.cmd_type = CommandType::JumpTo;
+                                    }
+                                    'c' => {
+                                        is_space_toggled = false;
+                                        cmd_builder.clear();
+                                    }
+                                    ' ' => {
+                                        is_space_toggled = !is_space_toggled;
+                                    }
+                                    _ => {}
                                 }
+                            } else {
+                                match c {
+                                    ' ' => {
+                                        is_space_toggled = !is_space_toggled;
+                                    }
+                                    'n' => {
+                                        page_scroll_state.show_line_numbers =
+                                            !page_scroll_state.show_line_numbers;
+                                    }
+
+                                    'j' => {
+                                        page_scroll_state.auto_scroll = false;
+                                        page_scroll_state
+                                            .apply_queue(new_scroll::InstructionQueue::Up);
+                                    }
+                                    'k' => {
+                                        page_scroll_state.auto_scroll = false;
+                                        page_scroll_state
+                                            .apply_queue(new_scroll::InstructionQueue::Down);
+                                    }
+                                    '/' | ':' => {}
+                                    _ => {
+                                        if !child_exited {
+                                            log::info!("Sending {c} to child process");
+                                            child_stdin_tx.send(c as u8)?;
+                                        }
+                                    }
+                                };
                             }
-                        };
-                        // TuiMode::Command => {
-                        //     app_state.command.push(c);
-                        //     app_state.reset_search();
-                        //     search_scroll_state.reset_scroll_position();
-                        // }
-                        // }
+                        }
 
                         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
-                                'c' => {
-                                    // app_state.command.clear();
-                                    // app_state.set_mode(TuiMode::Normal);
-                                }
+                                'c' => {}
                                 'q' => {
                                     break;
                                 }
@@ -198,6 +215,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                             std::sync::mpsc::TryRecvError::Disconnected => {
                                 log::warn!("child stdout disconnected");
                                 child_exited = true;
+
                                 let exit_status = child_handle.join().unwrap();
                                 page_scroll_state.add_line(&format!(
                                     "Child exited with {} and time took {:?}",
@@ -213,22 +231,17 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
         }
 
         term.draw(|frame| {
-            // if app_state.is_in_search_mode() {
-            //     main_pane_draw(
-            //         frame,
-            //         title.as_str(),
-            //         &mut app_state,
-            //         &mut search_scroll_state,
-            //     );
-            // } else {
-            //     main_pane_draw(
-            //         frame,
-            //         title.as_str(),
-            //         &mut app_state,
-            //         &mut main_scroll_state,
-            //     );
-            // }
-            main_pane_with_page_scroll_draw(frame, &title, &mut page_scroll_state);
+            main_pane_with_page_scroll_draw(
+                frame,
+                &title,
+                &mut page_scroll_state,
+                &cmd_builder,
+                &error_timer.error,
+            );
+
+            if is_space_toggled {
+                draw_space_menu(frame);
+            }
         })?;
     }
 
