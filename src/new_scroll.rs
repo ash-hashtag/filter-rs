@@ -72,18 +72,31 @@ impl PageScrollState {
             .and_then(|x| Some(x.idx))
             .unwrap_or(self.page_view.end);
 
-        if self.auto_scroll {
-            if self.page_view.end != self.page.len() {
-                self.page_view.end = self.page.len();
-                requires_redraw = true;
-            }
-        }
+        // if self.auto_scroll {
+        //     if self.page_view.end != self.page.len() {
+        //         self.page_view.end = self.page.len();
+        //         requires_redraw = true;
+        //     }
+        // }
         match queue {
-            InstructionQueue::None => {}
+            InstructionQueue::None => {
+                if self.auto_scroll {
+                    if self.page_view.end != self.page.len() {
+                        self.page_view.end = self.page.len();
+
+                        // todo auto scroll
+                    } else {
+                        self.lines_being_drawn.view =
+                            (self.lines_being_drawn.lines.len().saturating_sub(height))
+                                ..(self.lines_being_drawn.lines.len());
+                    }
+                }
+            }
             InstructionQueue::Up => {
                 if self.lines_being_drawn.view.end < previous_lines.len() {
                     self.lines_being_drawn.view.start += 1;
                     self.lines_being_drawn.view.end += 1;
+                    requires_redraw = true;
                     return requires_redraw;
                 }
                 if self.page.len() > self.page_view.end {
@@ -105,9 +118,13 @@ impl PageScrollState {
                  */
                 let mut visible_lines = LinkedList::new();
 
-                println!("pushing from previous end to new end lines until filling height");
-                for i in (previous_end..self.page_view.end).into_iter().rev() {
-                    self.page_view.start = i;
+                println!(
+                    "pushing from {} to {} lines until filling height",
+                    previous_end + 1,
+                    self.page_view.end
+                );
+                for i in (previous_end + 1..self.page_view.end + 1).into_iter().rev() {
+                    // self.page_view.start = i;
                     let lines = textwrap::wrap(&self.page[i], width);
                     for l in lines.iter().rev() {
                         visible_lines.push_front(LineWithIdx {
@@ -120,11 +137,31 @@ impl PageScrollState {
                     // }
                 }
 
-                let mut visible_end = self.lines_being_drawn.view.end + visible_lines.len();
+                // let mut visible_end = self.lines_being_drawn.view.end + visible_lines.len();
+                let mut visible_end = self.lines_being_drawn.view.end + 1;
                 println!("putting previous lines infront of visible lines");
                 previous_lines.append(&mut visible_lines);
 
-                self.lines_being_drawn.view = (visible_end.saturating_sub(height))..visible_end;
+                let mut visible_start = visible_end.saturating_sub(height);
+                let start_idx = previous_lines
+                    .iter()
+                    .nth(visible_start)
+                    .and_then(|x| Some(x.idx))
+                    .unwrap_or(0);
+                println!("popping front lines with idx < {start_idx}");
+
+                while let Some(item) = previous_lines.pop_front() {
+                    if item.idx >= start_idx {
+                        self.page_view.start = item.idx;
+                        previous_lines.push_front(item);
+                        break;
+                    } else {
+                        visible_start -= 1;
+                    }
+                }
+
+                self.lines_being_drawn.view =
+                    visible_start..(visible_start + height).min(previous_lines.len());
                 // self.lines_being_drawn = LinesToRenderAndView {
                 //     view: ,
                 //     lines: previous_lines,
