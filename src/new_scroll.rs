@@ -21,6 +21,8 @@ pub enum InstructionQueue {
         width: usize,
         height: usize,
     },
+
+    JumpTo(usize),
 }
 
 #[derive(Default, Debug)]
@@ -43,6 +45,7 @@ pub struct PageAndView {
 
 #[derive(Default)]
 pub struct PageScrollState {
+    pub show_line_numbers: bool,
     page: Page,
     page_view: Range<usize>,
     pub auto_scroll: bool,
@@ -323,6 +326,9 @@ impl PageScrollState {
 
                 self.requires_redraw = true;
             }
+            InstructionQueue::JumpTo(idx) => {
+                todo!()
+            }
         };
     }
 
@@ -349,7 +355,7 @@ impl<'a> Widget for PageScrollWidget<'a> {
     where
         Self: Sized,
     {
-        let padding = 6;
+        let padding = if self.state.show_line_numbers { 6 } else { 0 };
         let current_width = (area.width as usize - padding);
         let current_height = area.height as usize;
         if (self.state.width != current_width || self.state.height != current_height) {
@@ -361,13 +367,26 @@ impl<'a> Widget for PageScrollWidget<'a> {
             self.state.apply_queue(InstructionQueue::None);
         }
 
-        for (y, line) in self.state.view().enumerate() {
-            buf.set_string(
-                0,
-                area.y + y as u16,
-                &format!("{:>5} {}", line.idx, line.line),
-                Style::new(),
-            );
+        if self.state.show_line_numbers {
+            // move this allocation into ::resize, why keep track of them separetely, if it requires recomputation anyway
+
+            let mut last_idx = 0;
+            for (y, line) in self.state.view().enumerate() {
+                if last_idx == line.idx {
+                    // let s = format!("{:>6} {}", ' ', line.line);
+                    let s = &line.line;
+                    buf.set_string(padding as u16, area.y + y as u16, &s, Style::new());
+                } else {
+                    // let s = format!("{:>5} {}", line.idx, line.line);
+                    buf.set_string(0, area.y + y as u16, &line.idx.to_string(), Style::new());
+                    buf.set_string(padding as u16, area.y + y as u16, &line.line, Style::new());
+                };
+                last_idx = line.idx;
+            }
+        } else {
+            for (y, line) in self.state.view().enumerate() {
+                buf.set_string(0, area.y + y as u16, &line.line, Style::new());
+            }
         }
     }
 }

@@ -16,11 +16,8 @@ pub struct ChildHandle {
 
 impl ChildHandle {
     pub fn join(&mut self) -> anyhow::Result<ExitStatus> {
-        for handle in [
-            self.stdin_handle.take(),
-            self.stdout_handle.take(),
-            self.stderr_handle.take(),
-        ] {
+        let _ = self.stdin_handle.take();
+        for handle in [self.stdout_handle.take(), self.stderr_handle.take()] {
             if let Some(handle) = handle {
                 handle.join();
             }
