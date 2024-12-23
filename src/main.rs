@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+mod command;
 mod main_pane;
 mod new_scroll;
 mod pages;
@@ -10,8 +11,8 @@ mod sync_child;
 use std::io::{Stdout, Write};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use main_pane::main_pane_draw;
-use new_scroll::main2;
+use main_pane::{main_pane_draw, main_pane_with_page_scroll_draw};
+use new_scroll::{main2, PageScrollState};
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
 use scroll_view::ScrollState;
@@ -21,8 +22,7 @@ const REDRAW_MILLIS_FRAME_TIME: u64 = 64;
 // #[tokio::main]
 fn main() -> anyhow::Result<()> {
     init_logger();
-    // start_ratatui()?;
-    main2();
+    start_ratatui()?;
     Ok(())
 }
 
@@ -56,6 +56,9 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
 
     let mut current_width = 0u16;
     let mut current_height = 0u16;
+
+    let mut page_scroll_state = PageScrollState::default();
+    page_scroll_state.auto_scroll = true;
 
     let mut app_state = scroll_view::AppState::new(Page::new(), TuiMode::Normal);
     let mut main_scroll_state = ScrollState::default();
@@ -93,6 +96,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                         }
                         main_scroll_state.set_auto_scroll(true);
                         search_scroll_state.set_auto_scroll(true);
+                        page_scroll_state.auto_scroll = true;
                     }
 
                     KeyCode::Backspace => {
@@ -115,6 +119,8 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                                     app_state.show_line_numbers = !app_state.show_line_numbers;
                                 }
                                 'j' => {
+                                    page_scroll_state.auto_scroll = false;
+                                    page_scroll_state.apply_queue(new_scroll::InstructionQueue::Up);
                                     if app_state.is_in_search_mode() {
                                         search_scroll_state.go_up();
                                     } else {
@@ -122,6 +128,9 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                                     }
                                 }
                                 'k' => {
+                                    page_scroll_state.auto_scroll = false;
+                                    page_scroll_state
+                                        .apply_queue(new_scroll::InstructionQueue::Down);
                                     if app_state.is_in_search_mode() {
                                         search_scroll_state.go_down();
                                     } else {
@@ -172,6 +181,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             match stdout_rx.try_recv() {
                 Ok(s) => {
                     app_state.add_line(&s);
+                    page_scroll_state.add_line(&s);
                 }
                 Err(err) => match err {
                     std::sync::mpsc::TryRecvError::Empty => {}
@@ -181,43 +191,25 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                     }
                 },
             }
-
-            // match stdout_rx.try_recv() {
-            //     Ok(s) => {
-            //         app_state.add_line(&s);
-            //     }
-            //     Err(err) => match err {
-            //         tokio::sync::mpsc::error::TryRecvError::Empty => {}
-            //         tokio::sync::mpsc::error::TryRecvError::Disconnected => {
-            //             log::warn!("child stdout disconnected");
-            //             child_exited = true;
-            //             // break;
-            //         }
-            //     },
-            // }
-
-            // if stdout_rx.is_closed() {
-            //     log::error!("child stdout closed");
-            //     child_exited = true;
-            // }
         }
 
         term.draw(|frame| {
-            if app_state.is_in_search_mode() {
-                main_pane_draw(
-                    frame,
-                    title.as_str(),
-                    &mut app_state,
-                    &mut search_scroll_state,
-                );
-            } else {
-                main_pane_draw(
-                    frame,
-                    title.as_str(),
-                    &mut app_state,
-                    &mut main_scroll_state,
-                );
-            }
+            // if app_state.is_in_search_mode() {
+            //     main_pane_draw(
+            //         frame,
+            //         title.as_str(),
+            //         &mut app_state,
+            //         &mut search_scroll_state,
+            //     );
+            // } else {
+            //     main_pane_draw(
+            //         frame,
+            //         title.as_str(),
+            //         &mut app_state,
+            //         &mut main_scroll_state,
+            //     );
+            // }
+            main_pane_with_page_scroll_draw(frame, &title, &mut page_scroll_state);
         })?;
     }
 
