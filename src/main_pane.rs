@@ -54,6 +54,7 @@ pub fn main_pane_with_page_scroll_draw(
         );
         frame.render_widget(Block::bordered().title(status.as_str()), status_area);
     } else {
+        log::warn!("drawing error {}", error);
         frame.render_widget(
             Block::bordered()
                 .title(error)

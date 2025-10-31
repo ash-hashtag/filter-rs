@@ -1,6 +1,8 @@
 #![allow(unused)]
 
 mod command;
+pub mod double_linked_list;
+mod lines;
 mod main_pane;
 mod new_scroll;
 mod pages;
@@ -59,7 +61,7 @@ impl ErrorTimer {
 
     pub fn new(error: impl Into<String>) -> Self {
         Self {
-            error: String::new(),
+            error: error.into(),
             start: Instant::now(),
         }
     }
@@ -85,11 +87,11 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut child_exited = false;
     let mut is_space_toggled = false;
     let mut cmd_builder = CommandBuilder::default();
-    let mut error_timer = ErrorTimer::new("ERROR: Child exited");
+    let mut error_timer = ErrorTimer::new("");
 
     loop {
         let poll_duration = Duration::from_millis(REDRAW_MILLIS_FRAME_TIME);
-        error_timer.check(Duration::from_secs(5));
+        error_timer.check(Duration::from_secs(2));
 
         if event::poll(poll_duration)? {
             let event = crossterm::event::read()?;
@@ -120,7 +122,29 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                         }
                     }
                     KeyCode::Enter => {
-                        log::info!("Applied command {:?}", cmd_builder);
+                        log::info!("Applying command {:?}", cmd_builder);
+
+                        match cmd_builder.cmd_type {
+                            CommandType::JumpTo => {
+                                if let Ok(line_number) = cmd_builder.cmd.parse::<usize>() {
+                                    page_scroll_state.apply_queue(
+                                        new_scroll::InstructionQueue::JumpTo(line_number),
+                                    );
+                                } else {
+                                    error_timer = ErrorTimer::new(format!(
+                                        "Unable to parse line number {}",
+                                        cmd_builder.cmd
+                                    ));
+                                }
+                            }
+                            CommandType::Search => {
+                                let search_for = &cmd_builder.cmd;
+                            }
+                            _ => {
+                                log::warn!("unimplemented command type");
+                            }
+                        };
+
                         cmd_builder.clear();
                     }
                     KeyCode::Char(c) => {

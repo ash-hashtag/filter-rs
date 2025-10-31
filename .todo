@@ -1,3 +1,4 @@
 lot of code duplication, fix it
 regex support
 commands
+save the output to file

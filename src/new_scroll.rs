@@ -28,7 +28,7 @@ pub enum InstructionQueue {
 #[derive(Default, Debug)]
 pub struct LineWithIdx {
     pub idx: usize,
-    pub line: String,
+    pub line: Box<str>,
 }
 
 #[derive(Default, Debug)]
@@ -53,6 +53,7 @@ pub struct PageScrollState {
     width: usize,
     height: usize,
     pub requires_redraw: bool,
+    jumped_index: Option<usize>,
 }
 
 impl PageScrollState {
@@ -88,19 +89,13 @@ impl PageScrollState {
                         } else {
                             (previous_end..self.page_view.end)
                         };
-                        log::info!(
-                            "auto scrolling to end adding lines of previous_end_idx: {} page_view: {:?}",
-                            previous_end,
-                            range
-                        );
 
                         for i in range.into_iter().rev() {
-                            let lines = textwrap::wrap(&self.page[i], width);
+                            let lines = get_wrapped_lines(&self.page[i], width);
+
+                            // let lines = textwrap::wrap(&self.page[i], width);
                             for l in lines.into_iter().rev() {
-                                last_lines.push_front(LineWithIdx {
-                                    idx: i,
-                                    line: l.to_string(),
-                                });
+                                last_lines.push_front(LineWithIdx { idx: i, line: l });
                             }
 
                             if height <= last_lines.len() {
@@ -117,8 +112,6 @@ impl PageScrollState {
                         {
                             let back = previous_lines.back();
                             let front = last_lines.front();
-
-                            log::info!("Joining linked list at {:?} <> {:?}", back, front);
                         }
 
                         previous_lines.append(&mut last_lines);
@@ -168,45 +161,26 @@ impl PageScrollState {
                     return;
                 }
                 if self.page.len() > self.page_view.end {
-                    // self.page_view.start += 1;
                     self.page_view.end += 1;
-                    // self.get_lines_to_render(false);
                     self.requires_redraw = true;
                 }
-
-                /*
-                     0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
-                old_start-^      old_end-^         ^-new_end
-
-                  new_end > old_end
-
-                  calculate old_end to new_end in reverse
-                  append  (old_start to old_end) to  (old_end to new_end)
-
-                 */
                 let mut visible_lines = LinkedList::new();
 
                 let range = (previous_end + 1..(self.page_view.end + 1).min(self.page.len()));
 
-                log::info!("pushing from {:?} lines until filling height", range);
-
                 for i in range.into_iter().rev() {
-                    // self.page_view.start = i;
-                    let lines = textwrap::wrap(&self.page[i], width);
+                    let lines = get_wrapped_lines(&self.page[i], width);
+
+                    // let lines = textwrap::wrap(&self.page[i], width);
                     for l in lines.iter().rev() {
                         visible_lines.push_front(LineWithIdx {
                             idx: i,
-                            line: l.to_string(),
+                            line: l.as_ref().into(),
                         });
                     }
-                    // if height <= visible_lines.len() {
-                    //     break;
-                    // }
                 }
 
-                // let mut visible_end = self.lines_being_drawn.view.end + visible_lines.len();
                 let mut visible_end = self.lines_being_drawn.view.end + 1;
-                log::info!("putting previous lines infront of visible lines");
                 previous_lines.append(&mut visible_lines);
 
                 let mut visible_start = visible_end.saturating_sub(height);
@@ -215,7 +189,6 @@ impl PageScrollState {
                     .nth(visible_start)
                     .and_then(|x| Some(x.idx))
                     .unwrap_or(0);
-                log::info!("popping front lines with idx < {start_idx}");
 
                 while let Some(item) = previous_lines.pop_front() {
                     if item.idx >= start_idx {
@@ -244,29 +217,16 @@ impl PageScrollState {
                     return;
                 }
 
-                /*
-                     0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
-                old_start-^      new_end-^         ^-old_end
-
-                  new_end > old_end
-
-                  pop until new_end
-                  keep (old_start to new_end)
-                  calculate from old_start to 0 unil enough lines fill height
-
-                 */
-
                 let mut visible_end = self.lines_being_drawn.view.end - 1;
                 log::info!("pushing front lines until filling height");
                 for i in (0..previous_start).into_iter().rev() {
                     self.page_view.start = i;
-                    let lines = textwrap::wrap(&self.page[i], width);
-                    for l in lines.iter().rev() {
+
+                    let lines = get_wrapped_lines(&self.page[i], width);
+                    // let lines = textwrap::wrap(&self.page[i], width);
+                    for l in lines.into_iter().rev() {
                         visible_end += 1;
-                        previous_lines.push_front(LineWithIdx {
-                            idx: i,
-                            line: l.to_string(),
-                        });
+                        previous_lines.push_front(LineWithIdx { idx: i, line: l });
                     }
                     if height <= previous_lines.len() {
                         break;
@@ -308,13 +268,11 @@ impl PageScrollState {
 
                     for i in (0..self.page_view.end).into_iter().rev() {
                         self.page_view.start = i;
-                        let lines = textwrap::wrap(&self.page[i], width);
+                        // let lines = textwrap::wrap(&self.page[i], width);
+                        let lines = get_wrapped_lines(&self.page[i], width);
 
-                        for l in lines.iter().rev() {
-                            visible_lines.push_front(LineWithIdx {
-                                idx: i,
-                                line: l.to_string(),
-                            });
+                        for l in lines.into_iter().rev() {
+                            visible_lines.push_front(LineWithIdx { idx: i, line: l });
                         }
                         if height <= visible_lines.len() {
                             break;
@@ -327,7 +285,18 @@ impl PageScrollState {
                 self.requires_redraw = true;
             }
             InstructionQueue::JumpTo(idx) => {
-                todo!()
+                if self.page.len() <= idx {
+                    log::warn!("jump to is out of range {} 0..{}", idx, self.page.len());
+                    return;
+                }
+                self.requires_redraw = true;
+                self.jumped_index = Some(idx);
+
+                if !self.lines_being_drawn.lines.is_empty() {
+                    let front = self.lines_being_drawn.lines.front().unwrap();
+                    let back = self.lines_being_drawn.lines.back().unwrap();
+                    if front.idx <= idx && back.idx >= idx {}
+                }
             }
         };
     }
@@ -339,6 +308,13 @@ impl PageScrollState {
             .skip(self.lines_being_drawn.view.start)
             .take(self.lines_being_drawn.view.len())
     }
+}
+
+pub fn get_wrapped_lines(s: &str, width: usize) -> Vec<Box<str>> {
+    textwrap::wrap(s, width)
+        .iter()
+        .map(|x| x.as_ref().into())
+        .collect()
 }
 
 pub struct PageScrollWidget<'a> {
@@ -385,19 +361,25 @@ impl<'a> Widget for PageScrollWidget<'a> {
 
                     let number_padding = (padding - 1).saturating_sub(string_buf.len());
 
-                    buf.set_string(
-                        number_padding as u16,
-                        area.y + y as u16,
-                        &string_buf,
-                        Style::new(),
-                    );
-                    buf.set_string(padding as u16, area.y + y as u16, &line.line, Style::new());
+                    let style = if Some(line.idx) == self.state.jumped_index {
+                        Style::new().fg(ratatui::style::Color::Yellow)
+                    } else {
+                        Style::new()
+                    };
+
+                    buf.set_string(number_padding as u16, area.y + y as u16, &string_buf, style);
+                    buf.set_string(padding as u16, area.y + y as u16, &line.line, style);
                 };
                 last_idx = line.idx;
             }
         } else {
             for (y, line) in self.state.view().enumerate() {
-                buf.set_string(0, area.y + y as u16, &line.line, Style::new());
+                let style = if Some(line.idx) == self.state.jumped_index {
+                    Style::new().fg(ratatui::style::Color::Yellow)
+                } else {
+                    Style::new()
+                };
+                buf.set_string(0, area.y + y as u16, &line.line, style);
             }
         }
     }
