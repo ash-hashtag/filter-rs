@@ -1,80 +1,139 @@
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use crate::double_linked_list::Node;
-
-pub struct LineAndNumber {
-    line_no: usize,
-    line: String,
+#[derive(Debug)]
+pub struct Page {
+    line_start_number: usize,
+    lines: Vec<String>,
 }
-impl LineAndNumber {
-    pub fn new(line_no: usize, line: String) -> Self {
-        Self { line_no, line }
-    }
-}
-
-pub struct Lines {
-    head: Node<LineAndNumber>,
-    start: Node<LineAndNumber>,
-    max_number_of_lines: usize,
-}
-
-impl Lines {
-    pub fn new(max_number_of_lines: usize) -> Self {
-        let start = Node::new(LineAndNumber::new(0, String::new()));
+impl Page {
+    pub fn new(line_start_number: usize, lines: Vec<String>) -> Self {
         Self {
-            head: start.clone(),
-            start,
-            max_number_of_lines,
+            line_start_number,
+            lines,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Pages {
+    pages: RefCell<Vec<Page>>,
+
+    max_lines_per_page: usize,
+    max_number_of_pages: usize,
+}
+
+impl Pages {
+    pub fn new(max_lines_per_page: usize, max_number_of_pages: usize) -> Self {
+        Self {
+            pages: RefCell::new(Vec::new()),
+
+            max_lines_per_page,
+            max_number_of_pages,
         }
     }
 
-    pub fn push(&mut self, line: String) {
-        let line_no = self.head.value().line_no;
-        let next = Node::new(LineAndNumber::new(line_no + 1, line));
-        self.head.push_next(next.clone());
-        self.head = next;
+    pub fn add_line(&self, line: String) {
+        let mut pages = self.pages.borrow_mut();
 
-        if self.start.value().line_no + self.max_number_of_lines >= line_no {
-            if let Some(mut next) = self.start.next() {
-                next.pop_front();
-                self.start = next;
-            }
+        if pages.is_empty() {
+            pages.push(Page::new(0, vec![line]));
+            return;
+        }
+
+        let last_page = pages.last_mut().unwrap();
+        let last_line_number = last_page.lines.len() + last_page.line_start_number;
+
+        if last_page.lines.len() < self.max_lines_per_page {
+            last_page.lines.push(line);
+        } else {
+            pages.push(Page::new(last_line_number, vec![line]));
         }
     }
 
-    pub fn search_for(&self, word: String) {}
+    pub fn get_line(&self, line_number: usize) -> Option<String> {
+        let pages = self.pages.borrow();
+        let idx = match pages.binary_search_by_key(&line_number, |x| x.line_start_number) {
+            Ok(v) => v,
+            Err(v) => v.checked_sub(1)?,
+        };
+        let page = pages.get(idx)?;
+        let line = page.lines.get(line_number - page.line_start_number)?;
+
+        Some(line.to_owned())
+    }
+}
+
+#[test]
+fn test_pages() {
+    let pages = Pages::new(10, 4);
+    for i in 0..50 {
+        pages.add_line(i.to_string());
+    }
+
+    for i in 0..50 {
+        let line = pages.get_line(i).unwrap();
+
+        assert!(i.to_string() == line);
+    }
+
+    let mut iter = SearchIterator::new(pages, "4", 0);
+
+    let (line_no, line) = iter.next().unwrap();
+    eprintln!("{} {} {}", line_no, iter.current_line_number, line);
 }
 
 pub struct SearchIterator {
-    search: String,
-    cursor: Node<LineAndNumber>,
+    pages: Rc<Pages>,
+    search_for: String,
+
+    current_line_number: usize,
 }
 
-impl Iterator for SearchIterator {
-    type Item = Rc<LineAndNumber>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let value = self.cursor.value();
-            if value.line.contains(&self.search) {
-                self.cursor = self.cursor.next()?;
-                return Some(value);
-            }
+impl SearchIterator {
+    pub fn new(
+        pages: impl Into<Rc<Pages>>,
+        search_for: impl Into<String>,
+        current_line_number: usize,
+    ) -> Self {
+        Self {
+            pages: pages.into(),
+            search_for: search_for.into(),
+            current_line_number,
         }
-
-        None
     }
 }
 
-impl DoubleEndedIterator for SearchIterator {
-    fn next_back(&mut self) -> Option<Self::Item> {
+impl Iterator for SearchIterator {
+    type Item = (usize, String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let pages = self.pages.pages.borrow();
+
+        let idx =
+            match pages.binary_search_by_key(&self.current_line_number, |x| x.line_start_number) {
+                Ok(v) => v,
+                Err(v) => v.checked_sub(1)?,
+            };
+
+        let mut page = pages.get(idx)?;
+
         loop {
-            let value = self.cursor.value();
-            if value.line.contains(&self.search) {
-                self.cursor = self.cursor.prev()?;
-                return Some(value);
+            let idx_inside_page = self.current_line_number - page.line_start_number;
+            let line = page.lines.get(idx_inside_page)?;
+
+            self.current_line_number += 1;
+            if line.contains(&self.search_for) {
+                return Some((self.current_line_number - 1, line.to_owned()));
+            }
+
+            if idx_inside_page + 1 == page.lines.len() {
+                if idx + 1 == pages.len() {
+                    return None;
+                }
+                page = pages.get(idx + 1)?;
             }
         }
-        None
+
+        return None;
     }
 }
