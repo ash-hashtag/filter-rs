@@ -2,6 +2,7 @@
 
 mod command;
 pub mod double_linked_list;
+mod filter_view;
 mod lines;
 mod main_pane;
 mod new_scroll;
@@ -17,7 +18,7 @@ use std::{
 
 use command::{CommandBuilder, CommandType};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use main_pane::{draw_space_menu, main_pane_draw, main_pane_with_page_scroll_draw};
+use main_pane::{draw_space_menu, main_pane_with_page_scroll_draw};
 use new_scroll::{main2, PageScrollState};
 use pages::Page;
 use ratatui::prelude::CrosstermBackend;
@@ -81,8 +82,8 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
     let mut current_width = 0u16;
     let mut current_height = 0u16;
 
-    let mut page_scroll_state = PageScrollState::default();
-    page_scroll_state.auto_scroll = true;
+    let mut app_state = PageScrollState::default();
+    app_state.auto_scroll = true;
 
     let mut child_exited = false;
     let mut is_space_toggled = false;
@@ -111,7 +112,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
 
                 Event::Key(key_event) => match key_event.code {
                     KeyCode::Esc => {
-                        page_scroll_state.auto_scroll = true;
+                        app_state.auto_scroll = true;
                         is_space_toggled = false;
                         cmd_builder.clear();
                     }
@@ -127,15 +128,16 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                         match cmd_builder.cmd_type {
                             CommandType::JumpTo => {
                                 if let Ok(line_number) = cmd_builder.cmd.parse::<usize>() {
-                                    page_scroll_state.apply_queue(
-                                        new_scroll::InstructionQueue::JumpTo(line_number),
-                                    );
+                                    app_state.apply_queue(new_scroll::InstructionQueue::JumpTo(
+                                        line_number,
+                                    ));
                                 } else {
                                     error_timer = ErrorTimer::new(format!(
                                         "Unable to parse line number {}",
                                         cmd_builder.cmd
                                     ));
                                 }
+                                cmd_builder.clear();
                             }
                             CommandType::Search => {
                                 let search_for = &cmd_builder.cmd;
@@ -144,8 +146,6 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                                 log::warn!("unimplemented command type");
                             }
                         };
-
-                        cmd_builder.clear();
                     }
                     KeyCode::Char(c) => {
                         if !matches!(cmd_builder.cmd_type, CommandType::None) {
@@ -184,19 +184,16 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                                         is_space_toggled = !is_space_toggled;
                                     }
                                     'n' => {
-                                        page_scroll_state.show_line_numbers =
-                                            !page_scroll_state.show_line_numbers;
+                                        app_state.show_line_numbers = !app_state.show_line_numbers;
                                     }
 
                                     'j' => {
-                                        page_scroll_state.auto_scroll = false;
-                                        page_scroll_state
-                                            .apply_queue(new_scroll::InstructionQueue::Up);
+                                        app_state.auto_scroll = false;
+                                        app_state.apply_queue(new_scroll::InstructionQueue::Up);
                                     }
                                     'k' => {
-                                        page_scroll_state.auto_scroll = false;
-                                        page_scroll_state
-                                            .apply_queue(new_scroll::InstructionQueue::Down);
+                                        app_state.auto_scroll = false;
+                                        app_state.apply_queue(new_scroll::InstructionQueue::Down);
                                     }
                                     '/' | ':' => {}
                                     _ => {
@@ -231,7 +228,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                 match stdout_rx.try_recv() {
                     Ok(s) => {
                         // app_state.add_line(&s);
-                        page_scroll_state.add_line(&s);
+                        app_state.add_line(&s);
                     }
                     Err(err) => {
                         match err {
@@ -241,7 +238,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
                                 child_exited = true;
 
                                 let exit_status = child_handle.join().unwrap();
-                                page_scroll_state.add_line(&format!(
+                                app_state.add_line(&format!(
                                     "Child exited with {} and time took {:?}",
                                     exit_status,
                                     child_spawn_instant.elapsed()
@@ -258,7 +255,7 @@ fn run_ratatui(mut term: ratatui::Terminal<CrosstermBackend<Stdout>>) -> anyhow:
             main_pane_with_page_scroll_draw(
                 frame,
                 &title,
-                &mut page_scroll_state,
+                &mut app_state,
                 &cmd_builder,
                 &error_timer.error,
             );

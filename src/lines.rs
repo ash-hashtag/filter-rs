@@ -82,6 +82,34 @@ fn test_pages() {
     eprintln!("{} {} {}", line_no, iter.current_line_number, line);
 }
 
+#[test]
+fn test_search_iterator_bidirectional() {
+    let pages = Pages::new(5, 10);
+    for i in 0..20 {
+        pages.add_line(format!("line{}", i));
+    }
+
+    let mut iter = SearchIterator::new(pages, "line1", 10);
+    
+    // Forward iteration
+    let (line_no, line) = iter.next().unwrap();
+    assert_eq!(line_no, 10);
+    assert_eq!(line, "line10");
+    
+    let (line_no, line) = iter.next().unwrap();
+    assert_eq!(line_no, 11);
+    assert_eq!(line, "line11");
+    
+    // Backward iteration from end
+    let (line_no, line) = iter.next_back().unwrap();
+    assert_eq!(line_no, 19);
+    assert_eq!(line, "line19");
+    
+    let (line_no, line) = iter.next_back().unwrap();
+    assert_eq!(line_no, 18);
+    assert_eq!(line, "line18");
+}
+
 pub struct SearchIterator {
     pages: Rc<Pages>,
     search_for: String,
@@ -135,5 +163,40 @@ impl Iterator for SearchIterator {
         }
 
         return None;
+    }
+}
+
+impl DoubleEndedIterator for SearchIterator {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let pages = self.pages.pages.borrow();
+        
+        // Start from the last line if we haven't started backwards iteration
+        let mut search_line = if self.current_line_number == 0 {
+            // Find the total number of lines
+            let last_page = pages.last()?;
+            last_page.line_start_number + last_page.lines.len() - 1
+        } else {
+            self.current_line_number.checked_sub(1)?
+        };
+
+        loop {
+            let idx = match pages.binary_search_by_key(&search_line, |x| x.line_start_number) {
+                Ok(v) => v,
+                Err(v) => v.checked_sub(1)?,
+            };
+
+            let page = pages.get(idx)?;
+            let idx_inside_page = search_line - page.line_start_number;
+            let line = page.lines.get(idx_inside_page)?;
+
+            if line.contains(&self.search_for) {
+                return Some((search_line, line.to_owned()));
+            }
+
+            if search_line == 0 {
+                return None;
+            }
+            search_line -= 1;
+        }
     }
 }
