@@ -71,7 +71,7 @@ impl App {
 
         let pages = Arc::new(RwLock::new(Pages::new(100, 30)));
         let mut scroll_state = PageScrollState::new(pages.clone());
-        scroll_state.auto_scroll = true;
+        scroll_state.set_auto_scroll(true);
 
         Ok(Self {
             pages: pages,
@@ -248,15 +248,16 @@ impl App {
                 self.execute_command();
             }
             Action::ScrollUp => {
-                self.scroll_state.auto_scroll = false;
+                self.scroll_state.set_auto_scroll(false);
                 self.scroll_state.apply_queue(InstructionQueue::Up);
             }
             Action::ScrollDown => {
-                self.scroll_state.auto_scroll = false;
+                self.scroll_state.set_auto_scroll(false);
                 self.scroll_state.apply_queue(InstructionQueue::Down);
             }
             Action::ToggleLineNumbers => {
-                self.scroll_state.show_line_numbers = !self.scroll_state.show_line_numbers;
+                self.scroll_state
+                    .set_show_line_numbers(!self.scroll_state.show_line_numbers());
             }
             Action::JumpTo(line_number) => {
                 self.scroll_state

@@ -5,7 +5,6 @@ mod app;
 mod command;
 pub mod double_linked_list;
 mod filter_view;
-mod lines;
 mod main_pane;
 mod new_scroll;
 mod pages;
@@ -13,8 +12,8 @@ mod rc_str;
 mod scroll_view;
 mod sync_child;
 
-use std::io::Write;
 use app::App;
+use std::io::Write;
 
 // #[tokio::main]
 fn main() -> anyhow::Result<()> {
@@ -27,9 +26,9 @@ fn start_ratatui() -> anyhow::Result<()> {
     let mut term = ratatui::init();
     let mut app = App::new()?;
     let result = app.run(&mut term);
-    
+
     ratatui::restore();
-    
+
     if let Err(err) = result {
         log::error!("{:?}", err);
     }
@@ -68,5 +67,3 @@ fn init_logger() {
         })
         .init();
 }
-
-

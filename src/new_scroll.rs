@@ -46,14 +46,14 @@ pub struct PageAndView {
 
 #[derive(Default)]
 pub struct PageScrollState {
-    pub show_line_numbers: bool,
-    pub pages: Arc<RwLock<Pages>>, // Changed from page: Page to pages: Arc<RwLock<Pages>>
+    show_line_numbers: bool,
+    pages: Arc<RwLock<Pages>>, // Changed from page: Page to pages: Arc<RwLock<Pages>>
     page_view: Range<usize>,
-    pub auto_scroll: bool,
+    auto_scroll: bool,
     lines_being_drawn: LinesToRenderAndView,
     width: usize,
     height: usize,
-    pub requires_redraw: bool,
+    requires_redraw: bool,
     jumped_index: Option<usize>,
 }
 
@@ -63,6 +63,48 @@ impl PageScrollState {
             pages,
             ..Default::default()
         }
+    }
+
+    pub fn show_line_numbers(&self) -> bool {
+        self.show_line_numbers
+    }
+
+    pub fn set_show_line_numbers(&mut self, show: bool) {
+        self.show_line_numbers = show;
+        self.requires_redraw = true;
+    }
+
+    pub fn pages(&self) -> Arc<RwLock<Pages>> {
+        self.pages.clone()
+    }
+
+    pub fn set_pages(&mut self, pages: Arc<RwLock<Pages>>) {
+        self.pages = pages;
+        self.requires_redraw = true;
+    }
+
+    pub fn auto_scroll(&self) -> bool {
+        self.auto_scroll
+    }
+
+    pub fn set_auto_scroll(&mut self, auto: bool) {
+        self.auto_scroll = auto;
+    }
+
+    pub fn requires_redraw(&self) -> bool {
+        self.requires_redraw
+    }
+
+    pub fn set_requires_redraw(&mut self, redraw: bool) {
+        self.requires_redraw = redraw;
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
     }
 
     /// returns if the instruction requires redraw    
@@ -359,33 +401,23 @@ impl<'a> Widget for PageScrollWidget<'a> {
         }
 
         if self.state.show_line_numbers {
-            // move this allocation into ::resize, why keep track of them separetely, if it requires recomputation anyway
-
-            let mut last_idx = 0;
             let mut string_buf = String::with_capacity(padding);
             for (y, line) in self.state.view().enumerate() {
-                if last_idx == line.idx {
-                    // let s = format!("{:>6} {}", ' ', line.line);
-                    let s = &line.line;
-                    buf.set_string(padding as u16, area.y + y as u16, &s, Style::new());
+                use std::fmt::Write;
+
+                string_buf.clear();
+                write!(string_buf, "[{}]", line.idx);
+
+                let number_padding = (padding - 1).saturating_sub(string_buf.len());
+
+                let style = if Some(line.idx) == self.state.jumped_index {
+                    Style::new().fg(ratatui::style::Color::Yellow)
                 } else {
-                    // let s = format!("{:>5} {}", line.idx, line.line);
-                    use std::fmt::Write;
-                    string_buf.clear();
-                    write!(string_buf, "{}", line.idx);
-
-                    let number_padding = (padding - 1).saturating_sub(string_buf.len());
-
-                    let style = if Some(line.idx) == self.state.jumped_index {
-                        Style::new().fg(ratatui::style::Color::Yellow)
-                    } else {
-                        Style::new()
-                    };
-
-                    buf.set_string(number_padding as u16, area.y + y as u16, &string_buf, style);
-                    buf.set_string(padding as u16, area.y + y as u16, &line.line, style);
+                    Style::new()
                 };
-                last_idx = line.idx;
+
+                buf.set_string(number_padding as u16, area.y + y as u16, &string_buf, style);
+                buf.set_string(padding as u16, area.y + y as u16, &line.line, style);
             }
         } else {
             for (y, line) in self.state.view().enumerate() {
@@ -412,7 +444,7 @@ fn test_new_scroll() {
 
     // Pass pages to PageScrollState::new
     let mut state = PageScrollState::new(pages.clone());
-    state.auto_scroll = true;
+    state.set_auto_scroll(true);
     let mut buf = String::with_capacity(512);
 
     let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ    "
@@ -451,16 +483,16 @@ fn test_new_scroll() {
     });
 
     state.apply_queue(InstructionQueue::None);
-    if (state.requires_redraw) {
+    if state.requires_redraw() {
         display(&state);
     }
 
-    state.auto_scroll = false;
+    state.set_auto_scroll(false);
 
     println!("Going down");
     loop {
         state.apply_queue(InstructionQueue::Down);
-        if (state.requires_redraw) {
+        if state.requires_redraw() {
             display(&state);
         } else {
             println!("Required no redraw");
@@ -471,16 +503,16 @@ fn test_new_scroll() {
     println!("Going Up");
     for i in 0..5 {
         state.apply_queue(InstructionQueue::Up);
-        if (state.requires_redraw) {
+        if state.requires_redraw() {
             display(&state);
         }
     }
 
-    state.auto_scroll = true;
+    state.set_auto_scroll(true);
     println!("Autoscroll");
 
     state.apply_queue(InstructionQueue::None);
-    if (state.requires_redraw) {
+    if state.requires_redraw() {
         display(&state);
     }
 
@@ -490,9 +522,9 @@ fn test_new_scroll() {
 fn display(state: &PageScrollState) {
     print!(
         "--------terminal (autoscroll:{}, size:{}x{})-------- real length {}, view {:?}, page_view: {:?}\n",
-        state.auto_scroll,
-        state.width,
-        state.height,
+        state.auto_scroll(),
+        state.width(),
+        state.height(),
         state.lines_being_drawn.lines.len(),
         state.lines_being_drawn.view,
         state.page_view,

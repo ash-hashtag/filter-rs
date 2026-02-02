@@ -31,20 +31,20 @@ use crate::{
 //     );
 //     frame.render_widget(Block::bordered().title(status.as_str()), status_area);
 // }
-pub fn main_pane_with_page_scroll_draw(
-    frame: &mut Frame,
-    app: &mut crate::app::App,
-) {
+pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::App) {
     let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
     let [title_area, main_area, status_area] = vertical.areas(frame.area());
 
-    frame.render_widget(FilterTitleWidget::new(&app.cmd_builder, &app.title), title_area);
+    frame.render_widget(
+        FilterTitleWidget::new(&app.cmd_builder, &app.title),
+        title_area,
+    );
     frame.render_widget(PageScrollWidget::new(&mut app.scroll_state), main_area);
 
     if app.error_timer.error.is_empty() {
         let status = format!(
             "mode: NORMAL, scroll: {} | n: toggle numbers | '/': search | ^c: clear | ^q: exit",
-            app.scroll_state.auto_scroll
+            app.scroll_state.auto_scroll()
         );
         frame.render_widget(Block::bordered().title(status.as_str()), status_area);
     } else {
