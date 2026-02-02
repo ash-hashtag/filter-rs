@@ -7,8 +7,13 @@ use ratatui::{
 
 use crate::{
     pages::{Page, PageSearchIterator, PageSearchedLine},
-    TuiMode,
 };
+
+#[derive(Debug, Copy, Clone)]
+pub enum TuiMode {
+    Normal,
+    Command,
+}
 
 #[derive(Default)]
 pub struct ScrollState {

@@ -27,7 +27,7 @@ impl SearchPattern {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum CommandType {
     #[default]
     None,

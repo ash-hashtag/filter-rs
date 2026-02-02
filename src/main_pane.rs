@@ -33,28 +33,25 @@ use crate::{
 // }
 pub fn main_pane_with_page_scroll_draw(
     frame: &mut Frame,
-    title: &str,
-    page_scroll_state: &mut PageScrollState,
-    cmd_builder: &CommandBuilder,
-    error: &str,
+    app: &mut crate::app::App,
 ) {
     let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
     let [title_area, main_area, status_area] = vertical.areas(frame.area());
 
-    frame.render_widget(FilterTitleWidget::new(cmd_builder, title), title_area);
-    frame.render_widget(PageScrollWidget::new(page_scroll_state), main_area);
+    frame.render_widget(FilterTitleWidget::new(&app.cmd_builder, &app.title), title_area);
+    frame.render_widget(PageScrollWidget::new(&mut app.scroll_state), main_area);
 
-    if error.is_empty() {
+    if app.error_timer.error.is_empty() {
         let status = format!(
             "mode: NORMAL, scroll: {} | n: toggle numbers | '/': search | ^c: clear | ^q: exit",
-            page_scroll_state.auto_scroll
+            app.scroll_state.auto_scroll
         );
         frame.render_widget(Block::bordered().title(status.as_str()), status_area);
     } else {
-        log::warn!("drawing error {}", error);
+        log::warn!("drawing error {}", app.error_timer.error);
         frame.render_widget(
             Block::bordered()
-                .title(error)
+                .title(app.error_timer.error.as_str())
                 .style(Style::new().fg(ratatui::style::Color::Red)),
             status_area,
         );

@@ -9,7 +9,8 @@ use crossterm::QueueableCommand;
 use rand::{Rng, SeedableRng};
 use ratatui::{buffer::Buffer, style::Style, widgets::Widget};
 
-use crate::pages::{Page, PageLineIterator};
+use crate::pages::Pages;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum InstructionQueue {
@@ -39,14 +40,14 @@ pub struct LinesToRenderAndView {
 
 #[derive(Default)]
 pub struct PageAndView {
-    page: Page,
+    // page: Page, // Removing this potentially unused or needing update struct field
     view: Range<usize>,
 }
 
 #[derive(Default)]
 pub struct PageScrollState {
     pub show_line_numbers: bool,
-    page: Page,
+    pub pages: Arc<RwLock<Pages>>, // Changed from page: Page to pages: Arc<RwLock<Pages>>
     page_view: Range<usize>,
     pub auto_scroll: bool,
     lines_being_drawn: LinesToRenderAndView,
@@ -57,13 +58,18 @@ pub struct PageScrollState {
 }
 
 impl PageScrollState {
-    pub fn add_line(&mut self, line: &str) {
-        self.page.add_line(line);
+    pub fn new(pages: Arc<RwLock<Pages>>) -> Self {
+        Self {
+            pages,
+            ..Default::default()
+        }
     }
 
     /// returns if the instruction requires redraw    
     pub fn apply_queue(&mut self, queue: InstructionQueue) {
         let (width, height) = (self.width, self.height);
+        let pages = self.pages.read().unwrap(); // Lock pages for reading
+        let pages_len = pages.lines_count();
 
         let mut previous_lines = &mut self.lines_being_drawn.lines;
 
@@ -79,8 +85,8 @@ impl PageScrollState {
         match queue {
             InstructionQueue::None => {
                 if self.auto_scroll {
-                    if self.page_view.end != self.page.len() {
-                        self.page_view.end = self.page.len();
+                    if self.page_view.end != pages_len {
+                        self.page_view.end = pages_len;
 
                         let mut last_lines = LinkedList::new();
 
@@ -91,21 +97,24 @@ impl PageScrollState {
                         };
 
                         for i in range.into_iter().rev() {
-                            let lines = get_wrapped_lines(&self.page[i], width);
+                            // Using pages.get_line(i) instead of self.page[i]
+                            if let Some(line_content) = pages.get_line(i) {
+                                let lines = get_wrapped_lines(line_content, width);
 
-                            // let lines = textwrap::wrap(&self.page[i], width);
-                            for l in lines.into_iter().rev() {
-                                last_lines.push_front(LineWithIdx { idx: i, line: l });
-                            }
+                                // let lines = textwrap::wrap(&self.page[i], width);
+                                for l in lines.into_iter().rev() {
+                                    last_lines.push_front(LineWithIdx { idx: i, line: l });
+                                }
 
-                            if height <= last_lines.len() {
-                                self.page_view.start = i;
-                                self.lines_being_drawn.view =
-                                    last_lines.len().saturating_sub(height)..last_lines.len();
-                                self.lines_being_drawn.lines = last_lines;
+                                if height <= last_lines.len() {
+                                    self.page_view.start = i;
+                                    self.lines_being_drawn.view =
+                                        last_lines.len().saturating_sub(height)..last_lines.len();
+                                    self.lines_being_drawn.lines = last_lines;
 
-                                self.requires_redraw = true;
-                                return;
+                                    self.requires_redraw = true;
+                                    return;
+                                }
                             }
                         }
 
@@ -160,23 +169,25 @@ impl PageScrollState {
                     self.requires_redraw = true;
                     return;
                 }
-                if self.page.len() > self.page_view.end {
+                if pages_len > self.page_view.end {
                     self.page_view.end += 1;
                     self.requires_redraw = true;
                 }
                 let mut visible_lines = LinkedList::new();
 
-                let range = (previous_end + 1..(self.page_view.end + 1).min(self.page.len()));
+                let range = (previous_end + 1..(self.page_view.end + 1).min(pages_len));
 
                 for i in range.into_iter().rev() {
-                    let lines = get_wrapped_lines(&self.page[i], width);
+                    if let Some(line_content) = pages.get_line(i) {
+                        let lines = get_wrapped_lines(line_content, width);
 
-                    // let lines = textwrap::wrap(&self.page[i], width);
-                    for l in lines.iter().rev() {
-                        visible_lines.push_front(LineWithIdx {
-                            idx: i,
-                            line: l.as_ref().into(),
-                        });
+                        // let lines = textwrap::wrap(&self.page[i], width);
+                        for l in lines.iter().rev() {
+                            visible_lines.push_front(LineWithIdx {
+                                idx: i,
+                                line: l.as_ref().into(),
+                            });
+                        }
                     }
                 }
 
@@ -222,11 +233,13 @@ impl PageScrollState {
                 for i in (0..previous_start).into_iter().rev() {
                     self.page_view.start = i;
 
-                    let lines = get_wrapped_lines(&self.page[i], width);
-                    // let lines = textwrap::wrap(&self.page[i], width);
-                    for l in lines.into_iter().rev() {
-                        visible_end += 1;
-                        previous_lines.push_front(LineWithIdx { idx: i, line: l });
+                    if let Some(line_content) = pages.get_line(i) {
+                        let lines = get_wrapped_lines(line_content, width);
+                        // let lines = textwrap::wrap(&self.page[i], width);
+                        for l in lines.into_iter().rev() {
+                            visible_end += 1;
+                            previous_lines.push_front(LineWithIdx { idx: i, line: l });
+                        }
                     }
                     if height <= previous_lines.len() {
                         break;
@@ -269,10 +282,12 @@ impl PageScrollState {
                     for i in (0..self.page_view.end).into_iter().rev() {
                         self.page_view.start = i;
                         // let lines = textwrap::wrap(&self.page[i], width);
-                        let lines = get_wrapped_lines(&self.page[i], width);
+                        if let Some(line_content) = pages.get_line(i) {
+                            let lines = get_wrapped_lines(line_content, width);
 
-                        for l in lines.into_iter().rev() {
-                            visible_lines.push_front(LineWithIdx { idx: i, line: l });
+                            for l in lines.into_iter().rev() {
+                                visible_lines.push_front(LineWithIdx { idx: i, line: l });
+                            }
                         }
                         if height <= visible_lines.len() {
                             break;
@@ -285,8 +300,8 @@ impl PageScrollState {
                 self.requires_redraw = true;
             }
             InstructionQueue::JumpTo(idx) => {
-                if self.page.len() <= idx {
-                    log::warn!("jump to is out of range {} 0..{}", idx, self.page.len());
+                if pages_len <= idx {
+                    log::warn!("jump to is out of range {} 0..{}", idx, pages_len);
                     return;
                 }
                 self.requires_redraw = true;
@@ -387,8 +402,16 @@ impl<'a> Widget for PageScrollWidget<'a> {
 
 #[test]
 fn test_new_scroll() {
-    use std::fmt::Write;
-    let mut state = PageScrollState::default();
+    use crate::pages::Pages;
+    use std::fmt::Write; // Ensure Pages is imported
+                         // We need Arc and RwLock for the test too
+    use std::sync::{Arc, RwLock};
+
+    // Initialize Pages
+    let pages = Arc::new(RwLock::new(Pages::new(100, 5)));
+
+    // Pass pages to PageScrollState::new
+    let mut state = PageScrollState::new(pages.clone());
     state.auto_scroll = true;
     let mut buf = String::with_capacity(512);
 
@@ -407,11 +430,17 @@ fn test_new_scroll() {
             write!(&mut buf, "{} ", i);
         }
 
-        state.page.add_line(&buf);
+        // Add line to the shared pages instance
+        pages.write().unwrap().add_line(&buf);
     }
 
-    for (idx, line) in PageLineIterator::new(&state.page).enumerate() {
-        print!("{}: '{}'\n", idx, line);
+    // We can't iterate pages directly like before since it's wrapped now.
+    // Also PageLineIterator worked on Page, not Pages. Pages has get_lines_iter()
+    {
+        let pages_read = pages.read().unwrap();
+        for (idx, line) in pages_read.get_lines_iter().enumerate() {
+            print!("{}: '{}'\n", idx, line);
+        }
     }
 
     println!("^^^^^ current lines ^^^^^");
