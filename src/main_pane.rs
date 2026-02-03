@@ -8,11 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::{
-    command::{CommandBuilder, FilterTitleWidget},
-    new_scroll::{PageScrollState, PageScrollWidget},
-    scroll_view::{AppState, ScrollState, ScrollView},
-};
+use crate::{command::FilterTitleWidget, new_scroll::PageScrollWidget};
 
 pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::App) {
     let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);

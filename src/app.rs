@@ -8,7 +8,7 @@ use std::{
 use crate::{
     action::Action,
     command::{Command, CommandBuilder, CommandType, Matcher},
-    new_scroll::{InstructionQueue, PageScrollState},
+    new_scroll::PageScrollState,
     pages::Pages,
     sync_child,
 };
@@ -44,7 +44,6 @@ pub struct App {
     pub should_quit: bool,
 
     pub child_handle: Option<sync_child::ChildHandle>,
-    pub child_pid: Option<u32>,
     pub stdout_rx: std::sync::mpsc::Receiver<String>,
     pub child_stdin_tx: std::sync::mpsc::Sender<u8>,
     pub child_spawn_instant: Instant,
@@ -83,7 +82,6 @@ impl App {
             should_quit: false,
 
             child_handle: Some(child_handle),
-            child_pid: None, // If needed
             stdout_rx,
             child_stdin_tx,
             child_spawn_instant: Instant::now(),
@@ -283,14 +281,18 @@ impl App {
                 self.scroll_state.toggle_autoscroll();
                 self.is_space_toggled = false;
             }
-            Action::JumpTo(line_number) => {
-                self.scroll_state.jump_to(line_number);
-            }
+
             Action::SearchNext => {
                 if let Some(query) = &self.search_query {
                     let pages = self.pages.read().unwrap();
-                    let current_idx = self.scroll_state.bottom_line_idx();
+                    // Use cursor_idx as the reference point if available, otherwise bottom_line_idx
+                    let current_idx = self
+                        .scroll_state
+                        .cursor_idx()
+                        .unwrap_or(self.scroll_state.bottom_line_idx());
+
                     if let Some((next_idx, range)) = pages.find_next(query, current_idx) {
+                        // jump_to_with_range automatically disables autoscroll
                         self.scroll_state.jump_to_with_range(next_idx, range);
                     }
                 }
@@ -298,8 +300,14 @@ impl App {
             Action::SearchPrev => {
                 if let Some(query) = &self.search_query {
                     let pages = self.pages.read().unwrap();
-                    let current_idx = self.scroll_state.bottom_line_idx();
+                    // Use cursor_idx as the reference point if available, otherwise bottom_line_idx
+                    let current_idx = self
+                        .scroll_state
+                        .cursor_idx()
+                        .unwrap_or(self.scroll_state.bottom_line_idx());
+
                     if let Some((prev_idx, range)) = pages.find_prev(query, current_idx) {
+                        // jump_to_with_range automatically disables autoscroll
                         self.scroll_state.jump_to_with_range(prev_idx, range);
                     }
                 }
@@ -310,7 +318,6 @@ impl App {
                     self.child_stdin_tx.send(c as u8)?;
                 }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -363,7 +370,19 @@ impl App {
             loop {
                 match self.stdout_rx.try_recv() {
                     Ok(s) => {
-                        self.pages.write().unwrap().add_line(&s);
+                        let mut pages = self.pages.write().unwrap();
+                        pages.add_line(&s);
+                        let pages_len = pages.lines_count();
+                        if self.scroll_state.auto_scroll() {
+                            if let Some(query) = &self.search_query {
+                                let new_line_idx = pages_len.saturating_sub(1);
+                                if let Some(line) = pages.get_line(new_line_idx) {
+                                    if let Some(_match) = query.is_match(line) {
+                                        self.scroll_state.set_cursor(Some(new_line_idx));
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(err) => {
                         match err {

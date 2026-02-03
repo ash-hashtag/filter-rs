@@ -1,5 +1,5 @@
 use crate::command::Matcher;
-use std::ops::{Index, Range};
+use std::ops::Index;
 
 pub struct Pages {
     pages: Vec<Page>,
@@ -39,14 +39,6 @@ impl Pages {
             let mut page = Page::with_capacity(self.page_capacity);
             page.add_str(s);
             self.pages.push(page);
-        }
-    }
-
-    pub fn get_lines_iter<'a>(&'a self) -> PagesLineIterator<'a> {
-        PagesLineIterator {
-            pages: self,
-            front_cursor: self.global_offset,
-            back_cursor: self.lines_count(),
         }
     }
 
@@ -146,65 +138,17 @@ impl Pages {
     }
 }
 
-pub struct PagesLineIterator<'a> {
-    pages: &'a Pages,
-    front_cursor: usize,
-    back_cursor: usize,
-}
-
-impl<'a> Iterator for PagesLineIterator<'a> {
-    type Item = &'a str;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front_cursor >= self.back_cursor {
-            return None;
-        }
-        let s = self.pages.get_line(self.front_cursor);
-        self.front_cursor += 1;
-        s
-    }
-}
-
-impl<'a> DoubleEndedIterator for PagesLineIterator<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front_cursor >= self.back_cursor {
-            return None;
-        }
-
-        self.back_cursor -= 1;
-        let s = self.pages.get_line(self.back_cursor);
-
-        return s;
-    }
-}
-
 #[derive(Default, Clone)]
 pub struct Page {
     inner: String,
     indices: Vec<usize>,
 }
 
-const DEFAULT_PAGE_LINE_CAPACITY: usize = 8 * 1024;
-const DEFAULT_PAGE_CAPACITY: usize = 64 * DEFAULT_PAGE_LINE_CAPACITY;
-
 impl Page {
-    pub fn new() -> Self {
-        Self {
-            inner: String::with_capacity(DEFAULT_PAGE_CAPACITY),
-            indices: Vec::with_capacity(DEFAULT_PAGE_LINE_CAPACITY),
-        }
-    }
-
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: String::with_capacity(cap),
             indices: Vec::new(),
-        }
-    }
-    pub fn with_capacities(buffer_cap: usize, lines_cap: usize) -> Self {
-        Self {
-            inner: String::with_capacity(buffer_cap),
-            indices: Vec::with_capacity(lines_cap),
         }
     }
 
@@ -240,21 +184,6 @@ impl Page {
         Some(&self.inner[start..end])
     }
 
-    pub fn get_slice(&self, range: Range<usize>) -> Option<Vec<&str>> {
-        let allowed_range = 0..self.len();
-        if !(allowed_range.contains(&range.start) && allowed_range.contains(&range.end)) {
-            return None;
-        }
-
-        let mut slice = Vec::with_capacity(range.len());
-
-        for i in range {
-            slice.push(self.get_at(i).unwrap());
-        }
-
-        Some(slice)
-    }
-
     pub fn clear(&mut self) {
         self.inner.clear();
         self.indices.clear();
@@ -267,228 +196,6 @@ impl Index<usize> for Page {
     fn index(&self, index: usize) -> &Self::Output {
         self.get_at(index).unwrap()
     }
-}
-
-pub struct PageLineIterator<'a> {
-    page: &'a Page,
-    idx: usize,
-}
-
-impl<'a> PageLineIterator<'a> {
-    pub fn new(page: &'a Page) -> Self {
-        Self { page, idx: 0 }
-    }
-
-    pub fn current_idx(&self) -> usize {
-        self.idx.checked_sub(1).unwrap_or(0)
-    }
-
-    pub fn len(&self) -> usize {
-        self.page.len()
-    }
-}
-
-impl<'a> Iterator for PageLineIterator<'a> {
-    type Item = &'a str;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx == self.page.len() {
-            return None;
-        }
-        let item = &self.page[self.idx];
-        self.idx += 1;
-
-        Some(item)
-    }
-}
-
-impl<'a> DoubleEndedIterator for PageLineIterator<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.idx == self.page.len() {
-            return None;
-        }
-        let item = &self.page[self.page.len() - self.idx - 1];
-        self.idx += 1;
-
-        Some(item)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SearchResultLine<'a> {
-    pub line: &'a str,
-    pub line_index: usize,
-    pub substr_start: usize,
-}
-
-pub struct PageSearchIterator<'a> {
-    page_iter: PageLineIterator<'a>,
-    search_str: &'a str,
-}
-
-impl<'a> PageSearchIterator<'a> {
-    pub fn new(page: &'a Page, search_str: &'a str) -> Self {
-        Self {
-            page_iter: PageLineIterator::new(page),
-            search_str,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PageSearchedLine {
-    index: usize,
-    substr_start: usize,
-}
-
-impl PageSearchedLine {
-    pub fn new(index: usize, substr_start: usize) -> Self {
-        Self {
-            index,
-            substr_start,
-        }
-    }
-
-    pub fn as_str<'a, 'b>(&'b self, page: &'a Page) -> &'a str {
-        &page[self.index]
-    }
-
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    pub fn substr_start(&self) -> usize {
-        self.substr_start
-    }
-}
-
-impl<'a> Iterator for PageSearchIterator<'a> {
-    type Item = PageSearchedLine;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(item) = self.page_iter.next() {
-            if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
-                let line_index = self.page_iter.current_idx();
-                // return Some(SearchResultLine {
-                // line_index: self.page_iter.current_idx(),
-                //     line: item,
-                //     substr_start,
-                // });
-
-                return Some(PageSearchedLine::new(line_index, substr_start));
-            }
-        }
-
-        return None;
-    }
-}
-impl<'a> DoubleEndedIterator for PageSearchIterator<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(item) = self.page_iter.next_back() {
-            if let Some(substr_start) = item.to_lowercase().find(self.search_str) {
-                let line_index = self.page_iter.len() - self.page_iter.current_idx() - 1;
-                // return Some(SearchResultLine {
-                //     line_index: self.page_iter.len() - self.page_iter.current_idx() - 1,
-                //     line: item,
-                //     substr_start,
-                // });
-
-                return Some(PageSearchedLine::new(line_index, substr_start));
-            }
-        }
-        return None;
-    }
-}
-
-#[test]
-fn test_page_iterator_forward_backward() {
-    let mut page = Page::new();
-    let lines = vec!["one", "two", "three"];
-    for line in &lines {
-        page.add_line(line);
-    }
-
-    // Forward
-    let collected: Vec<&str> = PageLineIterator::new(&page).collect();
-    assert_eq!(collected, lines);
-
-    // Backward
-    let collected_rev: Vec<&str> = PageLineIterator::new(&page).rev().collect();
-    let mut lines_rev = lines.clone();
-    lines_rev.reverse();
-    assert_eq!(collected_rev, lines_rev);
-}
-
-#[test]
-fn test_pages_iterator_forward_backward() {
-    let mut pages = Pages::new(100, 5);
-    let mut expected = Vec::new();
-
-    // Add enough lines to fill a few pages roughly
-    // Page cap is 100 bytes.
-    // "line N" is 6 bytes. 100/6 ~= 16 lines per page.
-    for i in 0..50 {
-        let s = format!("line {}", i);
-        pages.add_line(&s);
-        expected.push(s);
-    }
-
-    // We need to compare specific strings, but expected owns the strings.
-    // The iterator returns &str referencing the pages.
-    // We can collect the iterator into Vec<&str> and compare matches.
-
-    let collected: Vec<&str> = pages.get_lines_iter().collect();
-    assert_eq!(collected.len(), 50);
-
-    for (i, line) in collected.iter().enumerate() {
-        assert_eq!(*line, expected[i].as_str());
-    }
-
-    // Reverse
-    let collected_rev: Vec<&str> = pages.get_lines_iter().rev().collect();
-    assert_eq!(collected_rev.len(), 50);
-
-    let mut expected_rev = expected.clone();
-    expected_rev.reverse();
-
-    for (i, line) in collected_rev.iter().enumerate() {
-        assert_eq!(*line, expected_rev[i].as_str());
-    }
-}
-
-#[test]
-fn test_page_search_iterator() {
-    let mut page = Page::new();
-    page.add_line("hello world"); // idx 0
-    page.add_line("foo bar"); // idx 1
-    page.add_line("world hello"); // idx 2
-    page.add_line("baz"); // idx 3
-
-    let search_str = "hello";
-    let iter = PageSearchIterator::new(&page, search_str);
-
-    let results: Vec<PageSearchedLine> = iter.collect();
-
-    assert_eq!(results.len(), 2);
-
-    // Check first match
-    assert_eq!(results[0].index(), 0);
-    // "hello" starts at 0 in "hello world"
-    assert_eq!(results[0].substr_start(), 0);
-
-    // Check second match
-    assert_eq!(results[1].index(), 2);
-    // "hello" starts at 6 in "world hello"
-    assert_eq!(results[1].substr_start(), 6);
-
-    // Reverse search
-    let iter_rev = PageSearchIterator::new(&page, search_str).rev();
-    let results_rev: Vec<PageSearchedLine> = iter_rev.collect();
-
-    assert_eq!(results_rev.len(), 2);
-    // Should be results reversed
-    assert_eq!(results_rev[0].index(), 2);
-    assert_eq!(results_rev[1].index(), 0);
 }
 
 #[test]

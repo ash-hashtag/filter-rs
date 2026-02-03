@@ -1,15 +1,9 @@
-#![allow(unused)]
-
 mod action;
 mod app;
 mod command;
-pub mod double_linked_list;
-mod filter_view;
 mod main_pane;
 mod new_scroll;
 mod pages;
-mod rc_str;
-mod scroll_view;
 mod sync_child;
 
 use app::App;

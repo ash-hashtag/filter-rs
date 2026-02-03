@@ -19,7 +19,7 @@ impl ChildHandle {
         let _ = self.stdin_handle.take();
         for handle in [self.stdout_handle.take(), self.stderr_handle.take()] {
             if let Some(handle) = handle {
-                handle.join();
+                let _ = handle.join();
             }
         }
 
@@ -29,7 +29,7 @@ impl ChildHandle {
 
 impl Drop for ChildHandle {
     fn drop(&mut self) {
-        self.child.kill();
+        let _ = self.child.kill();
     }
 }
 
@@ -102,7 +102,7 @@ where
     }
 }
 
-fn write_bytes<T>(mut writer: T, mut receiver: Receiver<u8>)
+fn write_bytes<T>(mut writer: T, receiver: Receiver<u8>)
 where
     T: Write + Unpin,
 {
