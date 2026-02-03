@@ -14,23 +14,6 @@ use crate::{
     scroll_view::{AppState, ScrollState, ScrollView},
 };
 
-// pub fn main_pane_draw(
-//     frame: &mut Frame,
-//     title: &str,
-//     app_state: &mut AppState,
-//     scroll_state: &mut ScrollState,
-// ) {
-//     let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
-//     let [title_area, main_area, status_area] = vertical.areas(frame.area());
-//     let title = Paragraph::new(app_state.command.as_str()).block(Block::bordered().title(title));
-//     frame.render_widget(title, title_area);
-//     frame.render_widget(ScrollView::new(app_state, scroll_state), main_area);
-//     let status = format!(
-//         "mode: {:?}, scroll: {} | n: toggle numbers | '/': search | ^c: clear | ^q: exit",
-//         app_state.mode, scroll_state.auto_scroll
-//     );
-//     frame.render_widget(Block::bordered().title(status.as_str()), status_area);
-// }
 pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::App) {
     let vertical = Layout::vertical([Length(3), Min(0), Length(1)]);
     let [title_area, main_area, status_area] = vertical.areas(frame.area());
@@ -39,7 +22,9 @@ pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::
         FilterTitleWidget::new(&app.cmd_builder, &app.title),
         title_area,
     );
-    frame.render_widget(PageScrollWidget::new(&mut app.scroll_state), main_area);
+    app.scroll_state
+        .set_size(main_area.width as usize, main_area.height as usize);
+    frame.render_widget(PageScrollWidget(&app.scroll_state), main_area);
 
     if app.error_timer.error.is_empty() {
         let status = format!(

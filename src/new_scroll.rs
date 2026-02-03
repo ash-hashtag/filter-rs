@@ -45,7 +45,7 @@ pub struct PageAndView {
 }
 
 #[derive(Default)]
-pub struct PageScrollState {
+pub struct OldPageScrollState {
     show_line_numbers: bool,
     pages: Arc<RwLock<Pages>>, // Changed from page: Page to pages: Arc<RwLock<Pages>>
     page_view: Range<usize>,
@@ -57,7 +57,7 @@ pub struct PageScrollState {
     jumped_index: Option<usize>,
 }
 
-impl PageScrollState {
+impl OldPageScrollState {
     pub fn new(pages: Arc<RwLock<Pages>>) -> Self {
         Self {
             pages,
@@ -374,16 +374,16 @@ pub fn get_wrapped_lines(s: &str, width: usize) -> Vec<Box<str>> {
         .collect()
 }
 
-pub struct PageScrollWidget<'a> {
-    state: &'a mut PageScrollState,
+pub struct OldPageScrollWidget<'a> {
+    state: &'a mut OldPageScrollState,
 }
 
-impl<'a> PageScrollWidget<'a> {
-    pub fn new(state: &'a mut PageScrollState) -> Self {
+impl<'a> OldPageScrollWidget<'a> {
+    pub fn new(state: &'a mut OldPageScrollState) -> Self {
         Self { state }
     }
 }
-impl<'a> Widget for PageScrollWidget<'a> {
+impl<'a> Widget for OldPageScrollWidget<'a> {
     fn render(self, area: ratatui::prelude::Rect, buf: &mut Buffer)
     where
         Self: Sized,
@@ -432,6 +432,223 @@ impl<'a> Widget for PageScrollWidget<'a> {
     }
 }
 
+pub struct PageScrollState {
+    pages: Arc<RwLock<Pages>>,
+    show_line_numbers: bool,
+    auto_scroll: bool,
+    width: usize,
+    height: usize,
+
+    // Manual scroll state
+    bottom_line_idx: usize,
+    bottom_line_wrapped_skip: usize, // number of sub-lines of bottom_line_idx to skip from the bottom
+
+    // Highlighted cursor
+    cursor_idx: Option<usize>,
+}
+
+impl PageScrollState {
+    pub fn new(pages: Arc<RwLock<Pages>>) -> Self {
+        Self {
+            pages,
+            show_line_numbers: false,
+            auto_scroll: true,
+            width: 0,
+            height: 0,
+            bottom_line_idx: 0,
+            bottom_line_wrapped_skip: 0,
+            cursor_idx: None,
+        }
+    }
+
+    pub fn set_size(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+    }
+
+    pub fn toggle_line_numbers(&mut self) {
+        self.show_line_numbers = !self.show_line_numbers;
+    }
+
+    pub fn toggle_autoscroll(&mut self) {
+        self.auto_scroll = !self.auto_scroll;
+    }
+
+    pub fn auto_scroll(&self) -> bool {
+        self.auto_scroll
+    }
+
+    pub fn show_line_numbers(&self) -> bool {
+        self.show_line_numbers
+    }
+
+    pub fn scroll_up(&mut self) {
+        let pages_len = self.pages.read().unwrap().lines_count();
+        if pages_len == 0 {
+            return;
+        }
+
+        if self.auto_scroll {
+            self.auto_scroll = false;
+            self.bottom_line_idx = pages_len.saturating_sub(1);
+            self.bottom_line_wrapped_skip = 0;
+            // After disabling autoscroll, we proceed to perform the actual scroll up.
+        }
+
+        let padding = if self.show_line_numbers { 6 } else { 0 };
+        let render_width = self.width.saturating_sub(padding);
+        log::debug!("scroll_up: pages_len={}, width={}, render_width={}, auto_scroll={}, bottom_idx={}, skip={}", 
+            pages_len, self.width, render_width, self.auto_scroll, self.bottom_line_idx, self.bottom_line_wrapped_skip);
+
+        if render_width == 0 {
+            return;
+        }
+
+        let pages = self.pages.read().unwrap();
+        if let Some(line) = pages.get_line(self.bottom_line_idx) {
+            let wrapped_count = get_wrapped_lines(line, render_width).len();
+            if self.bottom_line_wrapped_skip + 1 < wrapped_count {
+                self.bottom_line_wrapped_skip += 1;
+            } else if self.bottom_line_idx > pages.first_index() {
+                self.bottom_line_idx -= 1;
+                self.bottom_line_wrapped_skip = 0;
+            }
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        let pages_len = self.pages.read().unwrap().lines_count();
+        if pages_len == 0 {
+            return;
+        }
+
+        if self.auto_scroll {
+            return;
+        }
+
+        log::debug!(
+            "scroll_down: pages_len={}, width={}, auto_scroll={}, bottom_idx={}, skip={}",
+            pages_len,
+            self.width,
+            self.auto_scroll,
+            self.bottom_line_idx,
+            self.bottom_line_wrapped_skip
+        );
+
+        if self.bottom_line_wrapped_skip > 0 {
+            self.bottom_line_wrapped_skip -= 1;
+        } else {
+            self.bottom_line_idx += 1;
+            if self.bottom_line_idx >= pages_len {
+                self.bottom_line_idx = pages_len.saturating_sub(1);
+                self.auto_scroll = true;
+            }
+        }
+    }
+
+    pub fn jump_to(&mut self, idx: usize) {
+        let pages_len = self.pages.read().unwrap().lines_count();
+        if idx < pages_len {
+            self.auto_scroll = false;
+            self.bottom_line_idx = idx;
+            self.bottom_line_wrapped_skip = 0;
+            self.cursor_idx = Some(idx);
+        }
+    }
+
+    pub fn set_cursor(&mut self, idx: Option<usize>) {
+        self.cursor_idx = idx;
+    }
+}
+
+pub struct PageScrollWidget<'a>(pub &'a PageScrollState);
+
+impl<'a> Widget for PageScrollWidget<'a> {
+    fn render(self, area: ratatui::prelude::Rect, buf: &mut Buffer) {
+        let state = self.0;
+        let pages = state.pages.read().unwrap();
+        let pages_len = pages.lines_count();
+        if pages_len == 0 {
+            return;
+        }
+
+        let padding = if state.show_line_numbers { 6 } else { 0 };
+        let render_width = (area.width as usize).saturating_sub(padding);
+        if render_width == 0 {
+            return;
+        }
+
+        let mut lines_to_render = Vec::new();
+        let height = area.height as usize;
+
+        // Start from the bottom anchor and work backwards
+        let mut current_idx = if state.auto_scroll {
+            pages_len.saturating_sub(1)
+        } else {
+            state.bottom_line_idx.min(pages_len.saturating_sub(1))
+        };
+
+        let mut skip_sublines = if state.auto_scroll {
+            0
+        } else {
+            state.bottom_line_wrapped_skip
+        };
+
+        log::debug!(
+            "render: pages_len={}, area={:?}, auto_scroll={}, bottom_idx={}, skip={}",
+            pages_len,
+            area,
+            state.auto_scroll,
+            state.bottom_line_idx,
+            state.bottom_line_wrapped_skip
+        );
+
+        'outer: loop {
+            if let Some(line_content) = pages.get_line(current_idx) {
+                let wrapped = get_wrapped_lines(line_content, render_width);
+                for w in wrapped.into_iter().rev() {
+                    if skip_sublines > 0 {
+                        skip_sublines -= 1;
+                        continue;
+                    }
+                    lines_to_render.push((current_idx, w));
+                    if lines_to_render.len() >= height {
+                        break 'outer;
+                    }
+                }
+            }
+            if current_idx <= pages.first_index() {
+                break;
+            }
+            current_idx -= 1;
+            skip_sublines = 0; // Only skip for the bottom-most log line
+        }
+        lines_to_render.reverse();
+
+        for (i, (idx, line)) in lines_to_render.iter().enumerate() {
+            if i >= height {
+                break;
+            }
+
+            let y = area.y + i as u16;
+            let style = if Some(*idx) == state.cursor_idx {
+                Style::default().fg(ratatui::style::Color::Yellow)
+            } else {
+                Style::default()
+            };
+
+            if state.show_line_numbers {
+                let line_num = format!("[{}]", idx);
+                let num_padding = 5usize.saturating_sub(line_num.len());
+                buf.set_string(area.x + num_padding as u16, y, &line_num, style);
+                buf.set_string(area.x + padding as u16, y, line, style);
+            } else {
+                buf.set_string(area.x, y, line, style);
+            }
+        }
+    }
+}
+
 #[test]
 fn test_new_scroll() {
     use crate::pages::Pages;
@@ -442,8 +659,8 @@ fn test_new_scroll() {
     // Initialize Pages
     let pages = Arc::new(RwLock::new(Pages::new(100, 5)));
 
-    // Pass pages to PageScrollState::new
-    let mut state = PageScrollState::new(pages.clone());
+    // Pass pages to OldPageScrollState::new
+    let mut state = OldPageScrollState::new(pages.clone());
     state.set_auto_scroll(true);
     let mut buf = String::with_capacity(512);
 
@@ -519,7 +736,7 @@ fn test_new_scroll() {
     panic!("cuz rust don't show stdout");
 }
 
-fn display(state: &PageScrollState) {
+fn display(state: &OldPageScrollState) {
     print!(
         "--------terminal (autoscroll:{}, size:{}x{})-------- real length {}, view {:?}, page_view: {:?}\n",
         state.auto_scroll(),
@@ -546,13 +763,71 @@ fn display(state: &PageScrollState) {
     println!("------------------------------------------------------------------------------------------------");
 }
 
-pub fn main2() {
-    // use crossterm::terminal;
-    // let mut stdout = std::io::stdout();
-    // terminal::enable_raw_mode().unwrap();
-    // stdout.queue(terminal::EnterAlternateScreen).unwrap();
-    // let _ = new_scroll_page();
+#[test]
+fn test_new_page_scroll_widget() {
+    use crate::pages::Pages;
+    use std::fmt::Write;
+    use std::sync::{Arc, RwLock};
 
-    // stdout.queue(terminal::LeaveAlternateScreen).unwrap();
-    // terminal::disable_raw_mode().unwrap();
+    let pages = Arc::new(RwLock::new(Pages::new(100, 5)));
+    let mut state = PageScrollState::new(pages.clone());
+    state.set_size(20, 10);
+    state.toggle_line_numbers(); // show line numbers
+
+    for i in 0..15 {
+        let mut buf = String::new();
+        for _ in 0..(i % 5 + 1) {
+            write!(&mut buf, "L{} ", i).unwrap();
+        }
+        pages.write().unwrap().add_line(&buf);
+    }
+
+    println!("Testing NewPageScrollWidget with autoscroll=true");
+    display_new(&state);
+
+    state.toggle_autoscroll();
+    println!(
+        "Testing NewPageScrollWidget with autoscroll=false (currently just shows last lines too)"
+    );
+    display_new(&state);
+
+    state.toggle_line_numbers();
+    println!("Testing NewPageScrollWidget without line numbers");
+    display_new(&state);
+
+    println!("Testing scroll_up (disables autoscroll)");
+    state.scroll_up();
+    display_new(&state);
+
+    println!("Testing jump_to(5)");
+    state.jump_to(5);
+    display_new(&state);
+
+    println!("Testing scroll_down (re-enables autoscroll if at bottom)");
+    for _ in 0..15 {
+        state.scroll_down();
+    }
+    display_new(&state);
+
+    // panic!("To show output");
+}
+
+fn display_new(state: &PageScrollState) {
+    let area = ratatui::prelude::Rect::new(0, 0, state.width as u16, state.height as u16);
+    let mut buffer = Buffer::empty(area);
+    PageScrollWidget(state).render(area, &mut buffer);
+
+    println!(
+        "-------- PageScrollWidget (size:{}x{}) --------",
+        state.width, state.height
+    );
+    for y in 0..area.height {
+        let mut line = String::new();
+        for x in 0..area.width {
+            let cell = &buffer[(x, y)];
+            line.push(cell.symbol().chars().next().unwrap_or(' '));
+        }
+        println!("{}", line);
+    }
+    println!("---------------------------------------------------");
 }

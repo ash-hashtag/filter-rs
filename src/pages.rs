@@ -3,6 +3,7 @@ use std::ops::{Index, Range};
 pub struct Pages {
     pages: Vec<Page>,
     page_capacity: usize,
+    global_offset: usize,
 }
 
 impl Default for Pages {
@@ -18,6 +19,7 @@ impl Pages {
         Self {
             page_capacity,
             pages,
+            global_offset: 0,
         }
     }
 
@@ -28,6 +30,7 @@ impl Pages {
 
         if self.pages.len() == self.pages.capacity() {
             let mut page = self.pages.remove(0);
+            self.global_offset += page.len();
             page.clear();
             page.add_str(s);
             self.pages.push(page);
@@ -41,12 +44,21 @@ impl Pages {
     pub fn get_lines_iter<'a>(&'a self) -> PagesLineIterator<'a> {
         PagesLineIterator {
             pages: self,
-            inner_cursor: 0,
+            front_cursor: self.global_offset,
+            back_cursor: self.lines_count(),
         }
     }
 
+    pub fn first_index(&self) -> usize {
+        self.global_offset
+    }
+
     pub fn get_line(&self, idx: usize) -> Option<&str> {
-        let mut rdx = 0;
+        if idx < self.global_offset {
+            return None;
+        }
+
+        let mut rdx = self.global_offset;
 
         for page in &self.pages {
             if rdx + page.len() > idx {
@@ -60,6 +72,10 @@ impl Pages {
     }
 
     pub fn lines_count(&self) -> usize {
+        self.global_offset + self.current_lines_count()
+    }
+
+    pub fn current_lines_count(&self) -> usize {
         let mut size = 0;
 
         for page in &self.pages {
@@ -72,30 +88,31 @@ impl Pages {
 
 pub struct PagesLineIterator<'a> {
     pages: &'a Pages,
-    inner_cursor: usize,
+    front_cursor: usize,
+    back_cursor: usize,
 }
 
 impl<'a> Iterator for PagesLineIterator<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let s = self.pages.get_line(self.inner_cursor);
-        self.inner_cursor += 1;
+        if self.front_cursor >= self.back_cursor {
+            return None;
+        }
+        let s = self.pages.get_line(self.front_cursor);
+        self.front_cursor += 1;
         s
     }
 }
 
 impl<'a> DoubleEndedIterator for PagesLineIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.inner_cursor == self.pages.lines_count() {
+        if self.front_cursor >= self.back_cursor {
             return None;
         }
 
-        let s = self
-            .pages
-            .get_line(self.pages.lines_count() - self.inner_cursor - 1);
-
-        self.inner_cursor += 1;
+        self.back_cursor -= 1;
+        let s = self.pages.get_line(self.back_cursor);
 
         return s;
     }
@@ -462,16 +479,20 @@ fn test_pages_overflow_recycle() {
     pages.add_line("page3-new");
     assert_eq!(pages.pages.len(), 2);
 
-    // Expected lines: "page2-full", "page3-new"
-    // Note: get_line uses absolute indexing from the currently available pages.
-    // wait, get_line logic:
-    // rdx starts at 0.
-    // page 0 len is 1. idx 0 -> returns page 0 idx 0. -> "page2-full"
-    // idx 1 -> returns page 1 idx 0. -> "page3-new"
+    // Expected lines: "page1-full" was index 0, but it was dropped.
+    // "page2-full" was index 1 (relative to start of page 2).
+    // Now page 1 is dropped, global_offset should be 1.
+    // wait, "page1-full" in this test is ONE line but it fills the page capacity.
+    assert_eq!(pages.global_offset, 1);
+    assert_eq!(pages.lines_count(), 3);
 
-    assert_eq!(pages.get_line(0), Some("page2-full"));
-    assert_eq!(pages.get_line(1), Some("page3-new"));
+    // Index 0 should be None now
+    assert_eq!(pages.get_line(0), None);
+    // Index 1 should be "page2-full"
+    assert_eq!(pages.get_line(1), Some("page2-full"));
+    // Index 2 should be "page3-new"
+    assert_eq!(pages.get_line(2), Some("page3-new"));
 
-    // Verify lines_count
-    assert_eq!(pages.lines_count(), 2);
+    // Verify current_lines_count
+    assert_eq!(pages.current_lines_count(), 2);
 }

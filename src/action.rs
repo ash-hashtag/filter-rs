@@ -1,5 +1,5 @@
-use crossterm::event::KeyEvent;
 use crate::command::CommandType;
+use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -8,7 +8,7 @@ pub enum Action {
     Tick,
     Render,
     Key(KeyEvent),
-    
+
     // Mode transitions
     EnterCommandMode,
     EnterNormalMode,
@@ -27,10 +27,11 @@ pub enum Action {
     PageUp,
     PageDown,
     JumpTo(usize),
-    
+
     // Communication
     SendToChild(char),
-    
+
     // Toggles
     ToggleLineNumbers,
+    ToggleAutoscroll,
 }

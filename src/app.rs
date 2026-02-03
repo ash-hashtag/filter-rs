@@ -70,11 +70,10 @@ impl App {
         )?;
 
         let pages = Arc::new(RwLock::new(Pages::new(100, 30)));
-        let mut scroll_state = PageScrollState::new(pages.clone());
-        scroll_state.set_auto_scroll(true);
+        let scroll_state = PageScrollState::new(pages.clone());
 
         Ok(Self {
-            pages: pages,
+            pages,
             scroll_state,
             cmd_builder: CommandBuilder::default(),
             is_space_toggled: false,
@@ -99,6 +98,10 @@ impl App {
         let mut last_tick = Instant::now();
         let tick_rate = Duration::from_millis(64); // REDRAW_MILLIS_FRAME_TIME
 
+        if let Ok(size) = term.size() {
+            self.update(Action::Resize(size.width, size.height)).ok();
+        }
+
         loop {
             if self.should_quit {
                 break;
@@ -120,6 +123,8 @@ impl App {
                 let event = crossterm::event::read()?;
                 log::info!("Event: {:?}", event);
                 let action = self.get_action(event);
+
+                log::info!("Action: {:?}", action);
 
                 if let Some(action) = action {
                     self.update(action)?;
@@ -180,6 +185,7 @@ impl App {
                             'n' => Some(Action::ToggleLineNumbers),
                             'j' => Some(Action::ScrollDown),
                             'k' => Some(Action::ScrollUp),
+                            'a' => Some(Action::ToggleAutoscroll),
                             'q' => {
                                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                                     Some(Action::Quit)
@@ -218,10 +224,7 @@ impl App {
             }
             Action::Resize(w, h) => {
                 self.current_size = (w, h);
-                self.scroll_state.apply_queue(InstructionQueue::Resize {
-                    width: w as usize,
-                    height: h as usize,
-                });
+                self.scroll_state.set_size(w as usize, h as usize);
             }
             Action::Tick => {
                 self.error_timer.check(Duration::from_secs(2));
@@ -248,20 +251,19 @@ impl App {
                 self.execute_command();
             }
             Action::ScrollUp => {
-                self.scroll_state.set_auto_scroll(false);
-                self.scroll_state.apply_queue(InstructionQueue::Up);
+                self.scroll_state.scroll_up();
             }
             Action::ScrollDown => {
-                self.scroll_state.set_auto_scroll(false);
-                self.scroll_state.apply_queue(InstructionQueue::Down);
+                self.scroll_state.scroll_down();
             }
             Action::ToggleLineNumbers => {
-                self.scroll_state
-                    .set_show_line_numbers(!self.scroll_state.show_line_numbers());
+                self.scroll_state.toggle_line_numbers();
+            }
+            Action::ToggleAutoscroll => {
+                self.scroll_state.toggle_autoscroll();
             }
             Action::JumpTo(line_number) => {
-                self.scroll_state
-                    .apply_queue(InstructionQueue::JumpTo(line_number));
+                self.scroll_state.jump_to(line_number);
             }
             Action::SendToChild(c) => {
                 if !self.child_exited {
@@ -279,8 +281,7 @@ impl App {
         match self.cmd_builder.cmd_type {
             CommandType::JumpTo => {
                 if let Ok(line_number) = self.cmd_builder.cmd.parse::<usize>() {
-                    self.scroll_state
-                        .apply_queue(InstructionQueue::JumpTo(line_number));
+                    self.scroll_state.jump_to(line_number);
                 } else {
                     self.error_timer = ErrorTimer::new(format!(
                         "Unable to parse line number {}",
