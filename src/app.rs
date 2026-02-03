@@ -70,7 +70,7 @@ impl App {
             Some(child_stdin_rx),
         )?;
 
-        let pages = Arc::new(RwLock::new(Pages::new(40_000, 10)));
+        let pages = Arc::new(RwLock::new(Pages::default()));
         let scroll_state = PageScrollState::new(pages.clone());
 
         Ok(Self {
@@ -177,6 +177,7 @@ impl App {
                             'i' => Some(Action::Command(CommandType::Ignore)),
                             'f' => Some(Action::Command(CommandType::Filter)),
                             'n' => Some(Action::ToggleLineNumbers),
+                            'a' => Some(Action::ToggleAutoscroll),
                             ':' => Some(Action::Command(CommandType::JumpTo)),
                             'c' => Some(Action::ClearCommand),
                             'q' => Some(Action::Quit),
@@ -276,9 +277,11 @@ impl App {
             }
             Action::ToggleLineNumbers => {
                 self.scroll_state.toggle_line_numbers();
+                self.is_space_toggled = false;
             }
             Action::ToggleAutoscroll => {
                 self.scroll_state.toggle_autoscroll();
+                self.is_space_toggled = false;
             }
             Action::JumpTo(line_number) => {
                 self.scroll_state.jump_to(line_number);
@@ -329,9 +332,16 @@ impl App {
             CommandType::Search | CommandType::Regex => {
                 if let Some(cmd) = self.cmd_builder.build() {
                     let pages = self.pages.read().unwrap();
-                    if let Some((first_match, range)) = pages.find_next(&cmd, 0) {
-                        self.scroll_state.jump_to_with_range(first_match, range);
+                    if let Some((last_match, range)) = pages.find_prev(&cmd, pages.lines_count()) {
+                        if !self.scroll_state.auto_scroll() {
+                            self.scroll_state.jump_to_with_range(last_match, range);
+                        } else {
+                            // If autoscrolling, we just update the cursor position for highlights
+                            // without disabling autoscroll.
+                            self.scroll_state.set_cursor(Some(last_match));
+                        }
                     }
+                    self.scroll_state.set_search_query(Some(cmd.clone()));
                     self.search_query = Some(cmd);
                 }
                 self.cmd_builder.clear();

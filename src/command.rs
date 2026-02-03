@@ -30,6 +30,15 @@ impl Matcher for SearchPattern {
     }
 }
 
+impl std::fmt::Display for SearchPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SearchPattern::Regex(regexp) => write!(f, "{}", regexp),
+            SearchPattern::Substring(substr) => write!(f, "{}", substr),
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum CommandType {
     #[default]
@@ -56,12 +65,24 @@ impl CommandBuilder {
 
 pub struct FilterTitleWidget<'a> {
     cmd: &'a CommandBuilder,
+    active_filter: Option<String>,
+    active_search: Option<String>,
     title: &'a str,
 }
 
 impl<'a> FilterTitleWidget<'a> {
-    pub fn new(cmd: &'a CommandBuilder, title: &'a str) -> Self {
-        Self { cmd, title }
+    pub fn new(
+        cmd: &'a CommandBuilder,
+        active_filter: Option<String>,
+        active_search: Option<String>,
+        title: &'a str,
+    ) -> Self {
+        Self {
+            cmd,
+            active_filter,
+            active_search,
+            title,
+        }
     }
 }
 
@@ -72,16 +93,29 @@ impl<'a> Widget for FilterTitleWidget<'a> {
     {
         let mut command = String::with_capacity(self.cmd.cmd.len() + 16);
         let prefix = match self.cmd.cmd_type {
-            CommandType::None => "None",
+            CommandType::None => {
+                if let Some(f) = &self.active_filter {
+                    command.push_str("Filter: ");
+                    command.push_str(f);
+                } else if let Some(s) = &self.active_search {
+                    command.push_str("Search: ");
+                    command.push_str(s);
+                } else {
+                    command.push_str("None");
+                }
+                ""
+            }
             CommandType::Ignore => "Ignore",
             CommandType::Search => "Search",
             CommandType::Regex => "Regex",
             CommandType::JumpTo => "JumpTo",
             CommandType::Filter => "Filter",
         };
-        command.push_str(prefix);
-        command.push(':');
-        command.push_str(&self.cmd.cmd);
+        if !prefix.is_empty() {
+            command.push_str(prefix);
+            command.push(':');
+            command.push_str(&self.cmd.cmd);
+        }
 
         let title = Paragraph::new(command).block(Block::bordered().title(self.title));
 
@@ -110,13 +144,25 @@ impl CommandBuilder {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum Command {
     Ignore(SearchPattern),
     SearchFor(SearchPattern),
     FuzzySearch(String),
-
     Any(Vec<Command>),
     Every(Vec<Command>),
+}
+
+impl std::fmt::Display for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Command::Ignore(p) => write!(f, "Ignore:{}", p),
+            Command::SearchFor(p) => write!(f, "{}", p),
+            Command::FuzzySearch(s) => write!(f, "Fuzzy:{}", s),
+            Command::Any(v) => write!(f, "Any({:?})", v.len()),
+            Command::Every(v) => write!(f, "Every({:?})", v.len()),
+        }
+    }
 }
 
 impl Matcher for Command {

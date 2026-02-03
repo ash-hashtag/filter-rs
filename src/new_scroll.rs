@@ -454,6 +454,8 @@ pub struct PageScrollState {
 
     // Filter
     filter: Option<crate::command::Command>,
+    // Search highlight
+    pub search_query: Option<crate::command::Command>,
 }
 
 impl PageScrollState {
@@ -469,6 +471,7 @@ impl PageScrollState {
             cursor_idx: None,
             cursor_range: None,
             filter: None,
+            search_query: None,
         }
     }
 
@@ -482,6 +485,11 @@ impl PageScrollState {
     }
 
     pub fn toggle_autoscroll(&mut self) {
+        if self.auto_scroll {
+            let pages_len = self.pages.read().unwrap().lines_count();
+            self.bottom_line_idx = pages_len.saturating_sub(1);
+            self.bottom_line_wrapped_skip = 0;
+        }
         self.auto_scroll = !self.auto_scroll;
     }
 
@@ -589,7 +597,14 @@ impl PageScrollState {
 
     pub fn set_filter(&mut self, filter: Option<crate::command::Command>) {
         self.filter = filter;
-        self.auto_scroll = self.filter.is_none(); // usually we want to see historical filtered lines
+    }
+
+    pub fn filter(&self) -> Option<&crate::command::Command> {
+        self.filter.as_ref()
+    }
+
+    pub fn set_search_query(&mut self, query: Option<crate::command::Command>) {
+        self.search_query = query;
     }
 }
 
@@ -649,6 +664,13 @@ impl<'a> Widget for PageScrollWidget<'a> {
                         } else {
                             break;
                         }
+                    }
+                }
+
+                // If no filter highlight, check if search_query matches
+                if highlight.is_none() {
+                    if let Some(search) = &state.search_query {
+                        highlight = search.is_match(line_content);
                     }
                 }
 
