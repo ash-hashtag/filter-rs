@@ -5,23 +5,26 @@ use regex::Regex;
 
 use crate::pages::Page;
 
+pub trait Matcher {
+    fn is_match(&self, s: &str) -> Option<Range<usize>>;
+}
+
+#[derive(Debug, Clone)]
 pub enum SearchPattern {
-    Regex(String),
+    Regex(Regex),
     Substring(String),
 }
 
-impl SearchPattern {
-    pub fn is_match(&self, s: &str) -> Option<Range<usize>> {
+impl Matcher for SearchPattern {
+    fn is_match(&self, s: &str) -> Option<Range<usize>> {
         match self {
-            SearchPattern::Regex(r) => {
-                let regexp = Regex::new(r).ok()?;
+            SearchPattern::Regex(regexp) => {
                 let mat = regexp.find(s)?;
-
-                return Some(mat.start()..mat.end());
+                Some(mat.start()..mat.end())
             }
             SearchPattern::Substring(substr) => {
                 let start = s.find(substr)?;
-                return Some(start..start + substr.len());
+                Some(start..start + substr.len())
             }
         }
     }
@@ -35,6 +38,7 @@ pub enum CommandType {
     Search,
     Regex,
     JumpTo,
+    Filter,
 }
 
 #[derive(Default, Debug)]
@@ -73,6 +77,7 @@ impl<'a> Widget for FilterTitleWidget<'a> {
             CommandType::Search => "Search",
             CommandType::Regex => "Regex",
             CommandType::JumpTo => "JumpTo",
+            CommandType::Filter => "Filter",
         };
         command.push_str(prefix);
         command.push(':');
@@ -85,12 +90,22 @@ impl<'a> Widget for FilterTitleWidget<'a> {
 }
 
 impl CommandBuilder {
-    pub fn build(self) -> Command {
+    pub fn build(&self) -> Option<Command> {
         match self.cmd_type {
-            CommandType::Ignore => Command::Ignore(SearchPattern::Substring(self.cmd)),
-            CommandType::Search => Command::SearchFor(SearchPattern::Substring(self.cmd)),
-            CommandType::Regex => Command::SearchFor(SearchPattern::Regex(self.cmd)),
-            _ => unreachable!(),
+            CommandType::Ignore => {
+                Some(Command::Ignore(SearchPattern::Substring(self.cmd.clone())))
+            }
+            CommandType::Search => Some(Command::SearchFor(SearchPattern::Substring(
+                self.cmd.clone(),
+            ))),
+            CommandType::Regex => {
+                let regex = Regex::new(&self.cmd).ok()?;
+                Some(Command::SearchFor(SearchPattern::Regex(regex)))
+            }
+            CommandType::Filter => Some(Command::SearchFor(SearchPattern::Substring(
+                self.cmd.clone(),
+            ))),
+            _ => None,
         }
     }
 }
@@ -104,8 +119,8 @@ pub enum Command {
     Every(Vec<Command>),
 }
 
-impl Command {
-    pub fn is_match(&self, s: &str) -> Option<Range<usize>> {
+impl Matcher for Command {
+    fn is_match(&self, s: &str) -> Option<Range<usize>> {
         match self {
             Command::Ignore(search_pattern) => search_pattern.is_match(s),
             Command::SearchFor(search_pattern) => search_pattern.is_match(s),

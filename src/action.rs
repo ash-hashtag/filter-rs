@@ -27,6 +27,8 @@ pub enum Action {
     PageUp,
     PageDown,
     JumpTo(usize),
+    SearchNext,
+    SearchPrev,
 
     // Communication
     SendToChild(char),

@@ -9,6 +9,7 @@ use crossterm::QueueableCommand;
 use rand::{Rng, SeedableRng};
 use ratatui::{buffer::Buffer, style::Style, widgets::Widget};
 
+use crate::command::Matcher;
 use crate::pages::Pages;
 use std::sync::{Arc, RwLock};
 
@@ -144,7 +145,7 @@ impl OldPageScrollState {
                                 let lines = get_wrapped_lines(line_content, width);
 
                                 // let lines = textwrap::wrap(&self.page[i], width);
-                                for l in lines.into_iter().rev() {
+                                for (l, _) in lines.into_iter().rev() {
                                     last_lines.push_front(LineWithIdx { idx: i, line: l });
                                 }
 
@@ -224,10 +225,10 @@ impl OldPageScrollState {
                         let lines = get_wrapped_lines(line_content, width);
 
                         // let lines = textwrap::wrap(&self.page[i], width);
-                        for l in lines.iter().rev() {
+                        for (l, _) in lines.iter().rev() {
                             visible_lines.push_front(LineWithIdx {
                                 idx: i,
-                                line: l.as_ref().into(),
+                                line: l.clone(),
                             });
                         }
                     }
@@ -278,7 +279,7 @@ impl OldPageScrollState {
                     if let Some(line_content) = pages.get_line(i) {
                         let lines = get_wrapped_lines(line_content, width);
                         // let lines = textwrap::wrap(&self.page[i], width);
-                        for l in lines.into_iter().rev() {
+                        for (l, _) in lines.into_iter().rev() {
                             visible_end += 1;
                             previous_lines.push_front(LineWithIdx { idx: i, line: l });
                         }
@@ -327,7 +328,7 @@ impl OldPageScrollState {
                         if let Some(line_content) = pages.get_line(i) {
                             let lines = get_wrapped_lines(line_content, width);
 
-                            for l in lines.into_iter().rev() {
+                            for (l, _) in lines.into_iter().rev() {
                                 visible_lines.push_front(LineWithIdx { idx: i, line: l });
                             }
                         }
@@ -367,10 +368,14 @@ impl OldPageScrollState {
     }
 }
 
-pub fn get_wrapped_lines(s: &str, width: usize) -> Vec<Box<str>> {
-    textwrap::wrap(s, width)
+pub fn get_wrapped_lines(s: &str, width: usize) -> Vec<(Box<str>, Range<usize>)> {
+    let options = textwrap::Options::new(width);
+    textwrap::wrap(s, &options)
         .iter()
-        .map(|x| x.as_ref().into())
+        .map(|x| {
+            let start = x.as_ptr() as usize - s.as_ptr() as usize;
+            (x.as_ref().into(), start..start + x.len())
+        })
         .collect()
 }
 
@@ -445,6 +450,10 @@ pub struct PageScrollState {
 
     // Highlighted cursor
     cursor_idx: Option<usize>,
+    cursor_range: Option<Range<usize>>,
+
+    // Filter
+    filter: Option<crate::command::Command>,
 }
 
 impl PageScrollState {
@@ -458,6 +467,8 @@ impl PageScrollState {
             bottom_line_idx: 0,
             bottom_line_wrapped_skip: 0,
             cursor_idx: None,
+            cursor_range: None,
+            filter: None,
         }
     }
 
@@ -553,11 +564,32 @@ impl PageScrollState {
             self.bottom_line_idx = idx;
             self.bottom_line_wrapped_skip = 0;
             self.cursor_idx = Some(idx);
+            self.cursor_range = None;
+        }
+    }
+
+    pub fn jump_to_with_range(&mut self, idx: usize, range: Range<usize>) {
+        let pages_len = self.pages.read().unwrap().lines_count();
+        if idx < pages_len {
+            self.auto_scroll = false;
+            self.bottom_line_idx = idx;
+            self.bottom_line_wrapped_skip = 0;
+            self.cursor_idx = Some(idx);
+            self.cursor_range = Some(range);
         }
     }
 
     pub fn set_cursor(&mut self, idx: Option<usize>) {
         self.cursor_idx = idx;
+    }
+
+    pub fn bottom_line_idx(&self) -> usize {
+        self.bottom_line_idx
+    }
+
+    pub fn set_filter(&mut self, filter: Option<crate::command::Command>) {
+        self.filter = filter;
+        self.auto_scroll = self.filter.is_none(); // usually we want to see historical filtered lines
     }
 }
 
@@ -605,13 +637,28 @@ impl<'a> Widget for PageScrollWidget<'a> {
 
         'outer: loop {
             if let Some(line_content) = pages.get_line(current_idx) {
+                let mut highlight = None;
+                if let Some(filter) = &state.filter {
+                    if let Some(mat) = filter.is_match(line_content) {
+                        highlight = Some(mat);
+                    } else {
+                        // Skip line if it doesn't match filter
+                        if current_idx > pages.first_index() {
+                            current_idx -= 1;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
                 let wrapped = get_wrapped_lines(line_content, render_width);
-                for w in wrapped.into_iter().rev() {
+                for (w, source_range) in wrapped.into_iter().rev() {
                     if skip_sublines > 0 {
                         skip_sublines -= 1;
                         continue;
                     }
-                    lines_to_render.push((current_idx, w));
+                    lines_to_render.push((current_idx, w, source_range, highlight.clone()));
                     if lines_to_render.len() >= height {
                         break 'outer;
                     }
@@ -625,13 +672,13 @@ impl<'a> Widget for PageScrollWidget<'a> {
         }
         lines_to_render.reverse();
 
-        for (i, (idx, line)) in lines_to_render.iter().enumerate() {
+        for (i, (idx, line, source_range, filter_highlight)) in lines_to_render.iter().enumerate() {
             if i >= height {
                 break;
             }
 
             let y = area.y + i as u16;
-            let style = if Some(*idx) == state.cursor_idx {
+            let style = if Some(*idx) == state.cursor_idx && state.cursor_range.is_none() {
                 Style::default().fg(ratatui::style::Color::Yellow)
             } else {
                 Style::default()
@@ -641,10 +688,99 @@ impl<'a> Widget for PageScrollWidget<'a> {
                 let line_num = format!("[{}]", idx);
                 let num_padding = 5usize.saturating_sub(line_num.len());
                 buf.set_string(area.x + num_padding as u16, y, &line_num, style);
-                buf.set_string(area.x + padding as u16, y, line, style);
+
+                if let Some(range) = state.cursor_range.as_ref() {
+                    if Some(*idx) == state.cursor_idx {
+                        self.render_line_partial(
+                            buf,
+                            area.x + padding as u16,
+                            y,
+                            line,
+                            source_range,
+                            range,
+                        );
+                        continue;
+                    }
+                }
+
+                if let Some(range) = filter_highlight {
+                    self.render_line_partial(
+                        buf,
+                        area.x + padding as u16,
+                        y,
+                        line,
+                        source_range,
+                        range,
+                    );
+                } else {
+                    buf.set_string(area.x + padding as u16, y, line, style);
+                }
             } else {
-                buf.set_string(area.x, y, line, style);
+                if let Some(range) = state.cursor_range.as_ref() {
+                    if Some(*idx) == state.cursor_idx {
+                        self.render_line_partial(buf, area.x, y, line, source_range, range);
+                        continue;
+                    }
+                }
+
+                if let Some(range) = filter_highlight {
+                    self.render_line_partial(buf, area.x, y, line, source_range, range);
+                } else {
+                    buf.set_string(area.x, y, line, style);
+                }
             }
+        }
+    }
+}
+
+impl<'a> PageScrollWidget<'a> {
+    fn render_line_partial(
+        &self,
+        buf: &mut Buffer,
+        x: u16,
+        y: u16,
+        segment_text: &str,
+        segment_range: &Range<usize>,
+        highlight_range: &Range<usize>,
+    ) {
+        // Calculate the intersection of highlight_range and segment_range
+        let intersect_start = highlight_range.start.max(segment_range.start);
+        let intersect_end = highlight_range.end.min(segment_range.end);
+
+        if intersect_start < intersect_end {
+            // There is an intersection. Highlight only the intersected part.
+            // Indices relative to the segment_text
+            let rel_start = intersect_start - segment_range.start;
+            let rel_end = intersect_end - segment_range.start;
+
+            // Draw before highlight
+            if rel_start > 0 {
+                buf.set_string(x, y, &segment_text[..rel_start], Style::default());
+            }
+
+            // Draw highlight
+            let highlight_style = Style::default()
+                .bg(ratatui::style::Color::Yellow)
+                .fg(ratatui::style::Color::Black);
+            buf.set_string(
+                x + rel_start as u16,
+                y,
+                &segment_text[rel_start..rel_end],
+                highlight_style,
+            );
+
+            // Draw after highlight
+            if rel_end < segment_text.len() {
+                buf.set_string(
+                    x + rel_end as u16,
+                    y,
+                    &segment_text[rel_end..],
+                    Style::default(),
+                );
+            }
+        } else {
+            // No intersection
+            buf.set_string(x, y, segment_text, Style::default());
         }
     }
 }

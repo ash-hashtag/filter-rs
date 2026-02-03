@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     action::Action,
-    command::{Command, CommandBuilder, CommandType},
+    command::{Command, CommandBuilder, CommandType, Matcher},
     new_scroll::{InstructionQueue, PageScrollState},
     pages::Pages,
     sync_child,
@@ -50,6 +50,7 @@ pub struct App {
     pub child_spawn_instant: Instant,
     pub child_exited: bool,
     pub title: String,
+    pub search_query: Option<Command>,
 }
 
 impl App {
@@ -69,7 +70,7 @@ impl App {
             Some(child_stdin_rx),
         )?;
 
-        let pages = Arc::new(RwLock::new(Pages::new(100, 30)));
+        let pages = Arc::new(RwLock::new(Pages::new(40_000, 10)));
         let scroll_state = PageScrollState::new(pages.clone());
 
         Ok(Self {
@@ -88,6 +89,7 @@ impl App {
             child_spawn_instant: Instant::now(),
             child_exited: false,
             title,
+            search_query: None,
         })
     }
 
@@ -173,6 +175,8 @@ impl App {
                             's' => Some(Action::Command(CommandType::Search)),
                             'r' => Some(Action::Command(CommandType::Regex)),
                             'i' => Some(Action::Command(CommandType::Ignore)),
+                            'f' => Some(Action::Command(CommandType::Filter)),
+                            'n' => Some(Action::ToggleLineNumbers),
                             ':' => Some(Action::Command(CommandType::JumpTo)),
                             'c' => Some(Action::ClearCommand),
                             'q' => Some(Action::Quit),
@@ -182,7 +186,20 @@ impl App {
                     } else {
                         match c {
                             ' ' => Some(Action::ToggleSpaceMenu),
-                            'n' => Some(Action::ToggleLineNumbers),
+                            'n' => {
+                                if self.search_query.is_some() {
+                                    Some(Action::SearchNext)
+                                } else {
+                                    None
+                                }
+                            }
+                            'N' => {
+                                if self.search_query.is_some() {
+                                    Some(Action::SearchPrev)
+                                } else {
+                                    None
+                                }
+                            }
                             'j' => Some(Action::ScrollDown),
                             'k' => Some(Action::ScrollUp),
                             'a' => Some(Action::ToggleAutoscroll),
@@ -235,6 +252,7 @@ impl App {
             }
             Action::ClearCommand => {
                 self.cmd_builder.clear();
+                self.scroll_state.set_filter(None);
                 self.is_space_toggled = false;
             }
             Action::Command(cmd_type) => {
@@ -265,6 +283,24 @@ impl App {
             Action::JumpTo(line_number) => {
                 self.scroll_state.jump_to(line_number);
             }
+            Action::SearchNext => {
+                if let Some(query) = &self.search_query {
+                    let pages = self.pages.read().unwrap();
+                    let current_idx = self.scroll_state.bottom_line_idx();
+                    if let Some((next_idx, range)) = pages.find_next(query, current_idx) {
+                        self.scroll_state.jump_to_with_range(next_idx, range);
+                    }
+                }
+            }
+            Action::SearchPrev => {
+                if let Some(query) = &self.search_query {
+                    let pages = self.pages.read().unwrap();
+                    let current_idx = self.scroll_state.bottom_line_idx();
+                    if let Some((prev_idx, range)) = pages.find_prev(query, current_idx) {
+                        self.scroll_state.jump_to_with_range(prev_idx, range);
+                    }
+                }
+            }
             Action::SendToChild(c) => {
                 if !self.child_exited {
                     // log::info!("Sending {c} to child process");
@@ -290,8 +326,21 @@ impl App {
                 }
                 self.cmd_builder.clear();
             }
-            CommandType::Search => {
-                // Logic from main.rs
+            CommandType::Search | CommandType::Regex => {
+                if let Some(cmd) = self.cmd_builder.build() {
+                    let pages = self.pages.read().unwrap();
+                    if let Some((first_match, range)) = pages.find_next(&cmd, 0) {
+                        self.scroll_state.jump_to_with_range(first_match, range);
+                    }
+                    self.search_query = Some(cmd);
+                }
+                self.cmd_builder.clear();
+            }
+            CommandType::Filter => {
+                if let Some(cmd) = self.cmd_builder.build() {
+                    self.scroll_state.set_filter(Some(cmd));
+                }
+                self.cmd_builder.clear();
             }
             _ => {
                 log::warn!("unimplemented command type");

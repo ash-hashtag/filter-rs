@@ -1,3 +1,4 @@
+use crate::command::Matcher;
 use std::ops::{Index, Range};
 
 pub struct Pages {
@@ -83,6 +84,65 @@ impl Pages {
         }
 
         size
+    }
+
+    pub fn find_next<M: Matcher + ?Sized>(
+        &self,
+        matcher: &M,
+        after_idx: usize,
+    ) -> Option<(usize, std::ops::Range<usize>)> {
+        let mut current_global_idx = self.global_offset;
+
+        for page in &self.pages {
+            let page_len = page.len();
+            if current_global_idx + page_len > after_idx {
+                let start_idx_in_page = if after_idx >= current_global_idx {
+                    after_idx - current_global_idx + 1
+                } else {
+                    0
+                };
+
+                for i in start_idx_in_page..page_len {
+                    if let Some(line) = page.get_at(i) {
+                        if let Some(range) = matcher.is_match(line) {
+                            return Some((current_global_idx + i, range));
+                        }
+                    }
+                }
+            }
+            current_global_idx += page_len;
+        }
+
+        None
+    }
+
+    pub fn find_prev<M: Matcher + ?Sized>(
+        &self,
+        matcher: &M,
+        before_idx: usize,
+    ) -> Option<(usize, std::ops::Range<usize>)> {
+        let mut current_global_idx = self.global_offset;
+        let mut pages_with_start_indices = Vec::with_capacity(self.pages.len());
+
+        for page in &self.pages {
+            pages_with_start_indices.push((current_global_idx, page));
+            current_global_idx += page.len();
+        }
+
+        for (start_idx, page) in pages_with_start_indices.into_iter().rev() {
+            if start_idx < before_idx {
+                let end_idx_in_page = (before_idx - start_idx).min(page.len());
+                for i in (0..end_idx_in_page).rev() {
+                    if let Some(line) = page.get_at(i) {
+                        if let Some(range) = matcher.is_match(line) {
+                            return Some((start_idx + i, range));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 

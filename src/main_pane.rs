@@ -27,11 +27,8 @@ pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::
     frame.render_widget(PageScrollWidget(&app.scroll_state), main_area);
 
     if app.error_timer.error.is_empty() {
-        let status = format!(
-            "mode: NORMAL, scroll: {} | n: toggle numbers | '/': search | ^c: clear | ^q: exit",
-            app.scroll_state.auto_scroll()
-        );
-        frame.render_widget(Block::bordered().title(status.as_str()), status_area);
+        let status = "<space> to toggle menu";
+        frame.render_widget(Block::bordered().title(status), status_area);
     } else {
         log::warn!("drawing error {}", app.error_timer.error);
         frame.render_widget(
@@ -44,7 +41,8 @@ pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::
 }
 
 pub fn draw_space_menu(frame: &mut Frame) {
-    const MENU_CONTENT: &'static str = "s search\nr regex\ni ignore\nc clear\n: jump to\n";
+    const MENU_CONTENT: &'static str =
+        "s search\nr regex\ni ignore\nf filter\nn numbers\nc clear\n: jump to\n";
     let horizontal = Layout::horizontal([Min(0), Length(20)]).margin(8);
     let [_, menu_area] = horizontal.areas(frame.area());
     frame.render_widget(Clear, menu_area);
