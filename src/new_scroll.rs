@@ -85,7 +85,14 @@ impl PageScrollState {
     }
 
     pub fn scroll_up(&mut self) {
-        let pages_read = self.pages.read().unwrap();
+        let padding = if self.show_line_numbers { 6 } else { 0 };
+        let render_width = self.width.saturating_sub(padding).max(1);
+        if render_width == 0 {
+            return;
+        }
+
+        let pages_arc = self.pages.clone();
+        let pages_read = pages_arc.read().unwrap();
         let pages_len = pages_read.lines_count();
         if pages_len == 0 {
             return;
@@ -97,14 +104,17 @@ impl PageScrollState {
             self.bottom_line_wrapped_skip = 0;
         }
 
-        let padding = if self.show_line_numbers { 6 } else { 0 };
-        let render_width = self.width.saturating_sub(padding);
-        if render_width == 0 {
-            return;
-        }
-
         // Before scrolling up, check if we've already reached the top of the viewport
-        if self.is_top_reached(&pages_read) {
+        if is_top_reached_helper(
+            self.filter.as_ref(),
+            self.show_line_numbers,
+            self.width,
+            self.height,
+            self.auto_scroll,
+            self.bottom_line_idx,
+            self.bottom_line_wrapped_skip,
+            &*pages_read,
+        ) {
             return;
         }
 
@@ -127,15 +137,18 @@ impl PageScrollState {
                     {
                         self.bottom_line_idx = first_index + i;
                         self.bottom_line_wrapped_skip = 0;
-                        return;
+                        break;
                     }
                 }
             }
         }
+        drop(pages_read);
+        self.normalize_scroll();
     }
 
     pub fn scroll_down(&mut self) {
-        let pages_read = self.pages.read().unwrap();
+        let pages_arc = self.pages.clone();
+        let pages_read = pages_arc.read().unwrap();
         let pages_len = pages_read.lines_count();
         if pages_len == 0 {
             return;
@@ -160,34 +173,50 @@ impl PageScrollState {
                     .map_or(true, |f| f.is_match(line).is_some())
                 {
                     self.bottom_line_idx = first_index + skip + i;
-                    return;
+                    break;
                 }
             }
+
             // If we reached the end or couldn't find more matches
-            self.bottom_line_idx = pages_len.saturating_sub(1);
-            self.auto_scroll = true;
+            if self.bottom_line_idx == pages_len.saturating_sub(1) {
+                self.auto_scroll = true;
+            }
         }
+        drop(pages_read);
+        self.normalize_scroll();
     }
 
     pub fn jump_to(&mut self, idx: usize) {
-        let pages_len = self.pages.read().unwrap().lines_count();
+        let pages_arc = self.pages.clone();
+        let pages_read = pages_arc.read().unwrap();
+        let pages_len = pages_read.lines_count();
         if idx < pages_len {
             self.auto_scroll = false;
-            self.bottom_line_idx = idx;
-            self.bottom_line_wrapped_skip = 0;
+            if !self.is_idx_visible_internal(&*pages_read, idx) {
+                self.bottom_line_idx = idx;
+                self.bottom_line_wrapped_skip = 0;
+            }
             self.cursor_idx = Some(idx);
             self.cursor_range = None;
+            drop(pages_read);
+            self.normalize_scroll();
         }
     }
 
     pub fn jump_to_with_range(&mut self, idx: usize, range: Range<usize>) {
-        let pages_len = self.pages.read().unwrap().lines_count();
+        let pages_arc = self.pages.clone();
+        let pages_read = pages_arc.read().unwrap();
+        let pages_len = pages_read.lines_count();
         if idx < pages_len {
             self.auto_scroll = false;
-            self.bottom_line_idx = idx;
-            self.bottom_line_wrapped_skip = 0;
+            if !self.is_idx_visible_internal(&*pages_read, idx) {
+                self.bottom_line_idx = idx;
+                self.bottom_line_wrapped_skip = 0;
+            }
             self.cursor_idx = Some(idx);
             self.cursor_range = Some(range);
+            drop(pages_read);
+            self.normalize_scroll();
         }
     }
 
@@ -259,7 +288,7 @@ impl PageScrollState {
         self.cursor_idx
     }
 
-    pub fn is_top_reached(&self, pages: &Pages) -> bool {
+    fn is_idx_visible_internal(&self, pages: &Pages, target_idx: usize) -> bool {
         let padding = if self.show_line_numbers { 6 } else { 0 };
         let render_width = self.width.saturating_sub(padding).max(1);
         if self.height == 0 {
@@ -268,7 +297,7 @@ impl PageScrollState {
 
         let pages_len = pages.lines_count();
         if pages_len == 0 {
-            return true;
+            return false;
         }
 
         let end_idx = if self.auto_scroll {
@@ -277,38 +306,158 @@ impl PageScrollState {
             self.bottom_line_idx.min(pages_len.saturating_sub(1))
         };
 
+        if target_idx > end_idx {
+            return false;
+        }
+
         let mut skip_sublines = if self.auto_scroll {
             0
         } else {
             self.bottom_line_wrapped_skip
         };
-
         let mut total_rendered_lines = 0;
         let skip_from_back = pages_len.saturating_sub(end_idx + 1);
 
         let mut it = pages.iter();
         it.fast_skip_back(skip_from_back);
-        for line_content in it.rev() {
+        for (i, line_content) in it.enumerate().rev() {
+            let current_idx = pages.first_index() + i;
             if self
                 .filter
                 .as_ref()
                 .map_or(true, |f| f.is_match(line_content).is_some())
             {
+                if current_idx == target_idx {
+                    return true;
+                }
+
                 let wrapped_len = get_wrapped_lines(line_content, render_width).len();
                 let effective_lines = wrapped_len.saturating_sub(skip_sublines);
 
                 total_rendered_lines += effective_lines;
 
                 if total_rendered_lines >= self.height {
-                    return false; // Viewport is full
+                    return false; // Viewport is full and we didn't hit the target
                 }
             }
             skip_sublines = 0;
         }
 
-        // If we've processed all matching lines and viewport is not full, the top is reached
-        total_rendered_lines < self.height
+        false
     }
+
+    pub fn normalize_scroll(&mut self) {
+        if self.auto_scroll || self.height == 0 {
+            return;
+        }
+
+        // Clone Arc to decouple borrow from self
+        let pages_arc = self.pages.clone();
+        let pages = pages_arc.read().unwrap();
+
+        let mut current_bottom_idx = self.bottom_line_idx;
+        let mut current_wrapped_skip = self.bottom_line_wrapped_skip;
+
+        // While the top of the file is visible and there's potentially more to show at the bottom,
+        // scroll down (increase bottom_line_idx) to fill the gap.
+        while is_top_reached_helper(
+            self.filter.as_ref(),
+            self.show_line_numbers,
+            self.width,
+            self.height,
+            self.auto_scroll,
+            current_bottom_idx,
+            current_wrapped_skip,
+            &*pages,
+        ) {
+            let pages_len = pages.lines_count();
+            if current_bottom_idx + 1 >= pages_len {
+                break;
+            }
+
+            let first_index = pages.first_index();
+            let skip = current_bottom_idx + 1 - first_index;
+            let mut it = pages.iter();
+            it.fast_skip(skip);
+
+            let mut found = false;
+            for (i, line) in it.enumerate() {
+                if self
+                    .filter
+                    .as_ref()
+                    .map_or(true, |f| f.is_match(line).is_some())
+                {
+                    current_bottom_idx = first_index + skip + i;
+                    current_wrapped_skip = 0;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                break;
+            }
+        }
+
+        self.bottom_line_idx = current_bottom_idx;
+        self.bottom_line_wrapped_skip = current_wrapped_skip;
+    }
+}
+
+fn is_top_reached_helper(
+    filter: Option<&crate::command::Command>,
+    show_line_numbers: bool,
+    width: usize,
+    height: usize,
+    auto_scroll: bool,
+    bottom_line_idx: usize,
+    bottom_line_wrapped_skip: usize,
+    pages: &Pages,
+) -> bool {
+    let padding = if show_line_numbers { 6 } else { 0 };
+    let render_width = width.saturating_sub(padding).max(1);
+    if height == 0 {
+        return false;
+    }
+
+    let pages_len = pages.lines_count();
+    if pages_len == 0 {
+        return true;
+    }
+
+    let end_idx = if auto_scroll {
+        pages_len.saturating_sub(1)
+    } else {
+        bottom_line_idx.min(pages_len.saturating_sub(1))
+    };
+
+    let mut skip_sublines = if auto_scroll {
+        0
+    } else {
+        bottom_line_wrapped_skip
+    };
+
+    let mut total_rendered_lines = 0;
+    let skip_from_back = pages_len.saturating_sub(end_idx + 1);
+
+    let mut it = pages.iter();
+    it.fast_skip_back(skip_from_back);
+    for line_content in it.rev() {
+        if filter.map_or(true, |f| f.is_match(line_content).is_some()) {
+            let wrapped_len = get_wrapped_lines(line_content, render_width).len();
+            let effective_lines = wrapped_len.saturating_sub(skip_sublines);
+
+            total_rendered_lines += effective_lines;
+
+            if total_rendered_lines >= height {
+                return false; // Viewport is full
+            }
+        }
+        skip_sublines = 0;
+    }
+
+    // If we've processed all matching lines and viewport is not full, the top is reached
+    total_rendered_lines < height
 }
 
 pub struct PageScrollWidget<'a>(pub &'a PageScrollState);

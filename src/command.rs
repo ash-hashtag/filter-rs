@@ -111,7 +111,7 @@ impl<'a> Widget for FilterTitleWidget<'a> {
         };
         if !prefix.is_empty() {
             command.push_str(prefix);
-            command.push(':');
+            command.push_str(": ");
             command.push_str(&self.cmd.cmd);
         }
 

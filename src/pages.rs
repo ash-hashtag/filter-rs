@@ -11,7 +11,7 @@ pub struct Pages {
 
 impl Default for Pages {
     fn default() -> Self {
-        Self::new(40_000, 10)
+        Self::new(10_000, 10)
     }
 }
 
