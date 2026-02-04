@@ -3,8 +3,6 @@
 
 <div align="center">
 
-![Filter Logo](assets/logo.png)
-
 *A powerful stdout filtering tool for long running applications*
 
 [![Crates.io](https://img.shields.io/crates/v/filter.svg)](https://crates.io/crates/filter)
