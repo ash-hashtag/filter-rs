@@ -69,7 +69,11 @@ impl App {
             Some(child_stdin_rx),
         )?;
 
-        let pages = Arc::new(RwLock::new(Pages::default()));
+
+        let pages_count = std::env::var("PAGES_COUNT").ok().and_then(|x| x.parse::<usize>().ok()).unwrap_or(32);
+        let page_capacity = std::env::var("PAGE_CAP").ok().and_then(|x| x.parse::<usize>().ok()).unwrap_or(64 * 1024);
+
+        let pages = Arc::new(RwLock::new(Pages::new(page_capacity, pages_count)));
         let scroll_state = PageScrollState::new(pages.clone());
 
         Ok(Self {

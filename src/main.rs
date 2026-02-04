@@ -45,8 +45,9 @@ fn init_logger() {
     use log::LevelFilter;
     use std::fs::File;
 
-    let target = Box::new(File::create("/tmp/filter-log.txt").expect("Can't create file"));
-
+    if let Ok(log_file_path) = std::env::var("FILTER_LOG_FILE") {
+        
+    let target = Box::new(File::create(log_file_path).expect("Can't create file"));
     env_logger::Builder::new()
         .target(env_logger::Target::Pipe(target))
         .filter(None, LevelFilter::Debug)
@@ -62,4 +63,6 @@ fn init_logger() {
             )
         })
         .init();
+    }
+ 
 }
