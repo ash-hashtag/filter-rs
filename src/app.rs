@@ -69,9 +69,14 @@ impl App {
             Some(child_stdin_rx),
         )?;
 
-
-        let pages_count = std::env::var("PAGES_COUNT").ok().and_then(|x| x.parse::<usize>().ok()).unwrap_or(32);
-        let page_capacity = std::env::var("PAGE_CAP").ok().and_then(|x| x.parse::<usize>().ok()).unwrap_or(64 * 1024);
+        let pages_count = std::env::var("PAGES_COUNT")
+            .ok()
+            .and_then(|x| x.parse::<usize>().ok())
+            .unwrap_or(32);
+        let page_capacity = std::env::var("PAGE_CAP")
+            .ok()
+            .and_then(|x| x.parse::<usize>().ok())
+            .unwrap_or(64 * 1024);
 
         let pages = Arc::new(RwLock::new(Pages::new(page_capacity, pages_count)));
         let scroll_state = PageScrollState::new(pages.clone());
@@ -262,12 +267,15 @@ impl App {
                 self.cmd_builder.clear();
                 self.scroll_state.set_filter(None);
                 self.scroll_state.set_search_query(None);
+                self.scroll_state.set_cursor(None);
                 self.search_query = None;
                 self.is_space_toggled = false;
             }
             Action::Command(cmd_type) => {
                 self.is_space_toggled = false;
                 self.cmd_builder.cmd_type = cmd_type;
+                self.cmd_builder.cmd.clear();
+                self.scroll_state.set_cursor(None);
             }
             Action::TypeCommand(c) => {
                 self.cmd_builder.cmd.push(c);
@@ -371,6 +379,8 @@ impl App {
                 if let Some(cmd) = self.cmd_builder.build() {
                     self.scroll_state.set_filter(Some(cmd));
                 }
+                // Clear cursor highlighting when switching to filter mode
+                self.scroll_state.set_cursor(None);
                 self.cmd_builder.clear();
             }
             _ => {

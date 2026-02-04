@@ -222,6 +222,9 @@ impl PageScrollState {
 
     pub fn set_cursor(&mut self, idx: Option<usize>) {
         self.cursor_idx = idx;
+        if idx.is_none() {
+            self.cursor_range = None;
+        }
     }
 
     pub fn bottom_line_idx(&self) -> usize {
