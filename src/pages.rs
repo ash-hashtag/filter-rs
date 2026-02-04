@@ -1,9 +1,11 @@
 use crate::command::Matcher;
+use std::collections::VecDeque;
 use std::ops::Index;
 
 pub struct Pages {
-    pages: Vec<Page>,
+    pages: VecDeque<Page>,
     page_capacity: usize,
+    max_pages: usize,
     global_offset: usize,
 }
 
@@ -15,30 +17,31 @@ impl Default for Pages {
 
 impl Pages {
     pub fn new(page_capacity: usize, page_count: usize) -> Self {
-        let mut pages = Vec::with_capacity(page_count);
-        pages.push(Page::with_capacity(page_capacity));
+        let mut pages = VecDeque::with_capacity(page_count);
+        pages.push_back(Page::with_capacity(page_capacity));
         Self {
             page_capacity,
+            max_pages: page_count,
             pages,
             global_offset: 0,
         }
     }
 
     pub fn add_line(&mut self, s: &str) {
-        if self.pages.last_mut().unwrap().add_str_only_if_in_cap(s) {
+        if self.pages.back_mut().unwrap().add_str_only_if_in_cap(s) {
             return;
         }
 
-        if self.pages.len() == self.pages.capacity() {
-            let mut page = self.pages.remove(0);
+        if self.pages.len() == self.max_pages {
+            let mut page = self.pages.pop_front().unwrap();
             self.global_offset += page.len();
             page.clear();
             page.add_str(s);
-            self.pages.push(page);
+            self.pages.push_back(page);
         } else {
             let mut page = Page::with_capacity(self.page_capacity);
             page.add_str(s);
-            self.pages.push(page);
+            self.pages.push_back(page);
         }
     }
 
@@ -83,26 +86,18 @@ impl Pages {
         matcher: &M,
         after_idx: usize,
     ) -> Option<(usize, std::ops::Range<usize>)> {
-        let mut current_global_idx = self.global_offset;
+        let skip = if after_idx >= self.global_offset {
+            after_idx - self.global_offset + 1
+        } else {
+            0
+        };
 
-        for page in &self.pages {
-            let page_len = page.len();
-            if current_global_idx + page_len > after_idx {
-                let start_idx_in_page = if after_idx >= current_global_idx {
-                    after_idx - current_global_idx + 1
-                } else {
-                    0
-                };
-
-                for i in start_idx_in_page..page_len {
-                    if let Some(line) = page.get_at(i) {
-                        if let Some(range) = matcher.is_match(line) {
-                            return Some((current_global_idx + i, range));
-                        }
-                    }
-                }
+        let mut it = self.iter();
+        it.fast_skip(skip);
+        for (i, line) in it.enumerate() {
+            if let Some(range) = matcher.is_match(line) {
+                return Some((self.global_offset + skip + i, range));
             }
-            current_global_idx += page_len;
         }
 
         None
@@ -113,30 +108,165 @@ impl Pages {
         matcher: &M,
         before_idx: usize,
     ) -> Option<(usize, std::ops::Range<usize>)> {
-        let mut current_global_idx = self.global_offset;
-        let mut pages_with_start_indices = Vec::with_capacity(self.pages.len());
-
-        for page in &self.pages {
-            pages_with_start_indices.push((current_global_idx, page));
-            current_global_idx += page.len();
+        if before_idx <= self.global_offset {
+            return None;
         }
 
-        for (start_idx, page) in pages_with_start_indices.into_iter().rev() {
-            if start_idx < before_idx {
-                let end_idx_in_page = (before_idx - start_idx).min(page.len());
-                for i in (0..end_idx_in_page).rev() {
-                    if let Some(line) = page.get_at(i) {
-                        if let Some(range) = matcher.is_match(line) {
-                            return Some((start_idx + i, range));
-                        }
-                    }
-                }
+        let total_count = self.lines_count();
+        let skip_from_back = total_count.saturating_sub(before_idx);
+
+        let mut it = self.iter();
+        it.fast_skip_back(skip_from_back);
+        for (i, line) in it.enumerate().rev() {
+            if let Some(range) = matcher.is_match(line) {
+                return Some((self.global_offset + i, range));
             }
         }
 
         None
     }
+
+    pub fn find_all_matches<M: Matcher + ?Sized>(&self, matcher: &M) -> Vec<usize> {
+        let mut matches = Vec::new();
+        for (i, line) in self.iter().enumerate() {
+            if matcher.is_match(line).is_some() {
+                matches.push(self.global_offset + i);
+            }
+        }
+        matches
+    }
+
+    pub fn iter(&self) -> PagesIter<'_> {
+        PagesIter::new(self)
+    }
 }
+
+pub struct PagesIter<'a> {
+    pages: std::collections::vec_deque::Iter<'a, Page>,
+    front_iter: Option<PageIter<'a>>,
+    back_iter: Option<PageIter<'a>>,
+    total_len: usize,
+}
+
+impl<'a> PagesIter<'a> {
+    pub(crate) fn new(pages: &'a Pages) -> Self {
+        Self {
+            pages: pages.pages.iter(),
+            front_iter: None,
+            back_iter: None,
+            total_len: pages.current_lines_count(),
+        }
+    }
+
+    pub fn fast_skip(&mut self, mut n: usize) {
+        while n > 0 {
+            if let Some(iter) = &mut self.front_iter {
+                let len = iter.len();
+                if n < len {
+                    iter.fast_skip(n);
+                    self.total_len = self.total_len.saturating_sub(n);
+                    return;
+                }
+                n -= len;
+                self.total_len = self.total_len.saturating_sub(len);
+                self.front_iter = None;
+            } else if let Some(page) = self.pages.next() {
+                self.front_iter = Some(page.iter());
+            } else if let Some(iter) = &mut self.back_iter {
+                let len = iter.len();
+                let to_skip = n.min(len);
+                iter.fast_skip(to_skip);
+                self.total_len = self.total_len.saturating_sub(to_skip);
+                return;
+            } else {
+                return;
+            }
+        }
+    }
+
+    pub fn fast_skip_back(&mut self, mut n: usize) {
+        while n > 0 {
+            if let Some(iter) = &mut self.back_iter {
+                let len = iter.len();
+                if n < len {
+                    iter.fast_skip_back(n);
+                    self.total_len = self.total_len.saturating_sub(n);
+                    return;
+                }
+                n -= len;
+                self.total_len = self.total_len.saturating_sub(len);
+                self.back_iter = None;
+            } else if let Some(page) = self.pages.next_back() {
+                self.back_iter = Some(page.iter());
+            } else if let Some(iter) = &mut self.front_iter {
+                let len = iter.len();
+                let to_skip = n.min(len);
+                iter.fast_skip_back(to_skip);
+                self.total_len = self.total_len.saturating_sub(to_skip);
+                return;
+            } else {
+                return;
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for PagesIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(iter) = &mut self.front_iter {
+                if let Some(line) = iter.next() {
+                    self.total_len = self.total_len.saturating_sub(1);
+                    return Some(line);
+                }
+                self.front_iter = None;
+            }
+            if let Some(page) = self.pages.next() {
+                self.front_iter = Some(page.iter());
+            } else {
+                return self.back_iter.as_mut()?.next().map(|line| {
+                    self.total_len = self.total_len.saturating_sub(1);
+                    line
+                });
+            }
+        }
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.fast_skip(n);
+        self.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.total_len, Some(self.total_len))
+    }
+}
+
+impl<'a> DoubleEndedIterator for PagesIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(iter) = &mut self.back_iter {
+                if let Some(line) = iter.next_back() {
+                    self.total_len = self.total_len.saturating_sub(1);
+                    return Some(line);
+                }
+                self.back_iter = None;
+            }
+            if let Some(page) = self.pages.next_back() {
+                self.back_iter = Some(page.iter());
+            } else {
+                return self.front_iter.as_mut()?.next_back().map(|line| {
+                    self.total_len = self.total_len.saturating_sub(1);
+                    line
+                });
+            }
+        }
+    }
+}
+
+impl<'a> ExactSizeIterator for PagesIter<'a> {}
 
 #[derive(Default, Clone)]
 pub struct Page {
@@ -187,6 +317,69 @@ impl Page {
     pub fn clear(&mut self) {
         self.inner.clear();
         self.indices.clear();
+    }
+
+    pub fn iter(&self) -> PageIter<'_> {
+        PageIter {
+            page: self,
+            front_idx: 0,
+            back_idx: self.len(),
+        }
+    }
+}
+
+pub struct PageIter<'a> {
+    page: &'a Page,
+    front_idx: usize,
+    back_idx: usize,
+}
+
+impl<'a> PageIter<'a> {
+    pub fn fast_skip(&mut self, n: usize) {
+        self.front_idx = (self.front_idx + n).min(self.back_idx);
+    }
+
+    pub fn fast_skip_back(&mut self, n: usize) {
+        self.back_idx = self.back_idx.saturating_sub(n).max(self.front_idx);
+    }
+}
+
+impl<'a> Iterator for PageIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.front_idx >= self.back_idx {
+            return None;
+        }
+        let line = self.page.get_at(self.front_idx)?;
+        self.front_idx += 1;
+        Some(line)
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.front_idx += n;
+        self.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a> DoubleEndedIterator for PageIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front_idx >= self.back_idx {
+            return None;
+        }
+        self.back_idx -= 1;
+        self.page.get_at(self.back_idx)
+    }
+}
+
+impl<'a> ExactSizeIterator for PageIter<'a> {
+    fn len(&self) -> usize {
+        self.back_idx.saturating_sub(self.front_idx)
     }
 }
 

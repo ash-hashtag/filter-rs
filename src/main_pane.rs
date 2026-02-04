@@ -35,7 +35,15 @@ pub fn main_pane_with_page_scroll_draw(frame: &mut Frame, app: &mut crate::app::
         } else {
             "Numbers: OFF"
         };
-        let status = format!("{} | {} | <space> menu", scroll_status, line_numbers_status);
+        let match_status = if let Some((rank, total)) = app.scroll_state.get_match_status() {
+            format!(" | Matches: {}/{}", rank, total)
+        } else {
+            "".to_string()
+        };
+        let status = format!(
+            "{} | {}{} | <space> menu",
+            scroll_status, line_numbers_status, match_status
+        );
         frame.render_widget(Block::bordered().title(status), status_area);
     } else {
         log::warn!("drawing error {}", app.error_timer.error);

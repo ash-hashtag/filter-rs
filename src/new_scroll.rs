@@ -35,6 +35,9 @@ pub struct PageScrollState {
     filter: Option<crate::command::Command>,
     // Search highlight
     pub search_query: Option<crate::command::Command>,
+
+    // Match tracking
+    matches: Vec<usize>,
 }
 
 impl PageScrollState {
@@ -51,6 +54,7 @@ impl PageScrollState {
             cursor_range: None,
             filter: None,
             search_query: None,
+            matches: Vec::new(),
         }
     }
 
@@ -81,7 +85,8 @@ impl PageScrollState {
     }
 
     pub fn scroll_up(&mut self) {
-        let pages_len = self.pages.read().unwrap().lines_count();
+        let pages_read = self.pages.read().unwrap();
+        let pages_len = pages_read.lines_count();
         if pages_len == 0 {
             return;
         }
@@ -90,32 +95,48 @@ impl PageScrollState {
             self.auto_scroll = false;
             self.bottom_line_idx = pages_len.saturating_sub(1);
             self.bottom_line_wrapped_skip = 0;
-            // After disabling autoscroll, we proceed to perform the actual scroll up.
         }
 
         let padding = if self.show_line_numbers { 6 } else { 0 };
         let render_width = self.width.saturating_sub(padding);
-        log::debug!("scroll_up: pages_len={}, width={}, render_width={}, auto_scroll={}, bottom_idx={}, skip={}", 
-            pages_len, self.width, render_width, self.auto_scroll, self.bottom_line_idx, self.bottom_line_wrapped_skip);
-
         if render_width == 0 {
             return;
         }
 
-        let pages = self.pages.read().unwrap();
-        if let Some(line) = pages.get_line(self.bottom_line_idx) {
+        // Before scrolling up, check if we've already reached the top of the viewport
+        if self.is_top_reached(&pages_read) {
+            return;
+        }
+
+        if let Some(line) = pages_read.get_line(self.bottom_line_idx) {
             let wrapped_count = get_wrapped_lines(line, render_width).len();
             if self.bottom_line_wrapped_skip + 1 < wrapped_count {
                 self.bottom_line_wrapped_skip += 1;
-            } else if self.bottom_line_idx > pages.first_index() {
-                self.bottom_line_idx -= 1;
-                self.bottom_line_wrapped_skip = 0;
+            } else {
+                // Find previous line that satisfies the filter (if any)
+                let first_index = pages_read.first_index();
+                let skip_from_back = pages_len.saturating_sub(self.bottom_line_idx);
+
+                let mut it = pages_read.iter();
+                it.fast_skip_back(skip_from_back);
+                for (i, line) in it.enumerate().rev() {
+                    if self
+                        .filter
+                        .as_ref()
+                        .map_or(true, |f| f.is_match(line).is_some())
+                    {
+                        self.bottom_line_idx = first_index + i;
+                        self.bottom_line_wrapped_skip = 0;
+                        return;
+                    }
+                }
             }
         }
     }
 
     pub fn scroll_down(&mut self) {
-        let pages_len = self.pages.read().unwrap().lines_count();
+        let pages_read = self.pages.read().unwrap();
+        let pages_len = pages_read.lines_count();
         if pages_len == 0 {
             return;
         }
@@ -124,23 +145,27 @@ impl PageScrollState {
             return;
         }
 
-        log::debug!(
-            "scroll_down: pages_len={}, width={}, auto_scroll={}, bottom_idx={}, skip={}",
-            pages_len,
-            self.width,
-            self.auto_scroll,
-            self.bottom_line_idx,
-            self.bottom_line_wrapped_skip
-        );
-
         if self.bottom_line_wrapped_skip > 0 {
             self.bottom_line_wrapped_skip -= 1;
         } else {
-            self.bottom_line_idx += 1;
-            if self.bottom_line_idx >= pages_len {
-                self.bottom_line_idx = pages_len.saturating_sub(1);
-                self.auto_scroll = true;
+            let skip = self.bottom_line_idx + 1 - pages_read.first_index();
+            let first_index = pages_read.first_index();
+
+            let mut it = pages_read.iter();
+            it.fast_skip(skip);
+            for (i, line) in it.enumerate() {
+                if self
+                    .filter
+                    .as_ref()
+                    .map_or(true, |f| f.is_match(line).is_some())
+                {
+                    self.bottom_line_idx = first_index + skip + i;
+                    return;
+                }
             }
+            // If we reached the end or couldn't find more matches
+            self.bottom_line_idx = pages_len.saturating_sub(1);
+            self.auto_scroll = true;
         }
     }
 
@@ -184,10 +209,105 @@ impl PageScrollState {
 
     pub fn set_search_query(&mut self, query: Option<crate::command::Command>) {
         self.search_query = query;
+        self.matches.clear();
+    }
+
+    pub fn set_matches(&mut self, matches: Vec<usize>) {
+        self.matches = matches;
+    }
+
+    pub fn add_match(&mut self, idx: usize) {
+        if !self.matches.contains(&idx) {
+            self.matches.push(idx);
+            self.matches.sort_unstable();
+        }
+    }
+
+    pub fn remove_matches_before(&mut self, idx: usize) {
+        self.matches.retain(|&m| m >= idx);
+    }
+
+    pub fn get_match_status(&self) -> Option<(usize, usize)> {
+        if self.matches.is_empty() {
+            return None;
+        }
+
+        let total = self.matches.len();
+        let current_pos = self.cursor_idx.or(Some(self.bottom_line_idx))?;
+
+        // Find the rank of the current_pos among matches.
+        // If current_pos is exactly a match, show its rank.
+        // If not, maybe show the rank of the next match?
+        // User said "our cursor's position in there", so let's find the index in self.matches.
+        let rank = match self.matches.binary_search(&current_pos) {
+            Ok(idx) => idx + 1,
+            Err(idx) => {
+                // Not exactly on a match. idx is where it would be inserted.
+                // Let's show the one before it, or 1 if it's before all.
+                if idx == 0 {
+                    1
+                } else {
+                    idx
+                }
+            }
+        };
+
+        Some((rank, total))
     }
 
     pub fn cursor_idx(&self) -> Option<usize> {
         self.cursor_idx
+    }
+
+    pub fn is_top_reached(&self, pages: &Pages) -> bool {
+        let padding = if self.show_line_numbers { 6 } else { 0 };
+        let render_width = self.width.saturating_sub(padding).max(1);
+        if self.height == 0 {
+            return false;
+        }
+
+        let pages_len = pages.lines_count();
+        if pages_len == 0 {
+            return true;
+        }
+
+        let end_idx = if self.auto_scroll {
+            pages_len.saturating_sub(1)
+        } else {
+            self.bottom_line_idx.min(pages_len.saturating_sub(1))
+        };
+
+        let mut skip_sublines = if self.auto_scroll {
+            0
+        } else {
+            self.bottom_line_wrapped_skip
+        };
+
+        let mut total_rendered_lines = 0;
+        let skip_from_back = pages_len.saturating_sub(end_idx + 1);
+
+        let mut it = pages.iter();
+        it.fast_skip_back(skip_from_back);
+        for line_content in it.rev() {
+            if self
+                .filter
+                .as_ref()
+                .map_or(true, |f| f.is_match(line_content).is_some())
+            {
+                let wrapped_len = get_wrapped_lines(line_content, render_width).len();
+                let effective_lines = wrapped_len.saturating_sub(skip_sublines);
+
+                total_rendered_lines += effective_lines;
+
+                if total_rendered_lines >= self.height {
+                    return false; // Viewport is full
+                }
+            }
+            skip_sublines = 0;
+        }
+
+        // If we've processed all matching lines and viewport is not full, the top is reached
+        total_rendered_lines < self.height
     }
 }
 
@@ -208,11 +328,11 @@ impl<'a> Widget for PageScrollWidget<'a> {
             return;
         }
 
-        let mut lines_to_render = Vec::new();
         let height = area.height as usize;
+        let mut lines_to_render = Vec::new();
 
         // Start from the bottom anchor and work backwards
-        let mut current_idx = if state.auto_scroll {
+        let end_idx = if state.auto_scroll {
             pages_len.saturating_sub(1)
         } else {
             state.bottom_line_idx.min(pages_len.saturating_sub(1))
@@ -224,56 +344,40 @@ impl<'a> Widget for PageScrollWidget<'a> {
             state.bottom_line_wrapped_skip
         };
 
-        log::debug!(
-            "render: pages_len={}, area={:?}, auto_scroll={}, bottom_idx={}, skip={}",
-            pages_len,
-            area,
-            state.auto_scroll,
-            state.bottom_line_idx,
-            state.bottom_line_wrapped_skip
-        );
+        let first_index = pages.first_index();
+        let skip_from_back = pages_len.saturating_sub(end_idx + 1);
 
-        'outer: loop {
-            if let Some(line_content) = pages.get_line(current_idx) {
-                let mut highlight = None;
-                if let Some(filter) = &state.filter {
-                    if let Some(mat) = filter.is_match(line_content) {
-                        highlight = Some(mat);
-                    } else {
-                        // Skip line if it doesn't match filter
-                        if current_idx > pages.first_index() {
-                            current_idx -= 1;
-                            continue;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                // If no filter highlight, check if search_query matches
-                if highlight.is_none() {
-                    if let Some(search) = &state.search_query {
-                        highlight = search.is_match(line_content);
-                    }
-                }
-
-                let wrapped = get_wrapped_lines(line_content, render_width);
-                for (w, source_range) in wrapped.into_iter().rev() {
-                    if skip_sublines > 0 {
-                        skip_sublines -= 1;
-                        continue;
-                    }
-                    lines_to_render.push((current_idx, w, source_range, highlight.clone()));
-                    if lines_to_render.len() >= height {
-                        break 'outer;
-                    }
+        let mut it = pages.iter();
+        it.fast_skip_back(skip_from_back);
+        'outer: for (i, line_content) in it.enumerate().rev() {
+            let current_idx = first_index + i;
+            let mut highlight = None;
+            if let Some(filter) = &state.filter {
+                if let Some(mat) = filter.is_match(line_content) {
+                    highlight = Some(mat);
+                } else {
+                    continue;
                 }
             }
-            if current_idx <= pages.first_index() {
-                break;
+
+            // If no filter highlight, check if search_query matches
+            if highlight.is_none() {
+                if let Some(search) = &state.search_query {
+                    highlight = search.is_match(line_content);
+                }
             }
-            current_idx -= 1;
-            skip_sublines = 0; // Only skip for the bottom-most log line
+
+            let wrapped = get_wrapped_lines(line_content, render_width);
+            for (w, source_range) in wrapped.into_iter().rev() {
+                if skip_sublines > 0 {
+                    skip_sublines -= 1;
+                    continue;
+                }
+                lines_to_render.push((current_idx, w, source_range, highlight.clone()));
+                if lines_to_render.len() >= height {
+                    break 'outer;
+                }
+            }
         }
         lines_to_render.reverse();
 

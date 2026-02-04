@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use ratatui::prelude::*;
 use std::{
     sync::{Arc, RwLock},
@@ -149,6 +149,11 @@ impl App {
                     None
                 }
             }
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => Some(Action::ScrollUp),
+                MouseEventKind::ScrollDown => Some(Action::ScrollDown),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -252,6 +257,8 @@ impl App {
             Action::ClearCommand => {
                 self.cmd_builder.clear();
                 self.scroll_state.set_filter(None);
+                self.scroll_state.set_search_query(None);
+                self.search_query = None;
                 self.is_space_toggled = false;
             }
             Action::Command(cmd_type) => {
@@ -339,6 +346,8 @@ impl App {
             CommandType::Search | CommandType::Regex => {
                 if let Some(cmd) = self.cmd_builder.build() {
                     let pages = self.pages.read().unwrap();
+                    let matches = pages.find_all_matches(&cmd);
+
                     if let Some((last_match, range)) = pages.find_prev(&cmd, pages.lines_count()) {
                         if !self.scroll_state.auto_scroll() {
                             self.scroll_state.jump_to_with_range(last_match, range);
@@ -349,6 +358,7 @@ impl App {
                         }
                     }
                     self.scroll_state.set_search_query(Some(cmd.clone()));
+                    self.scroll_state.set_matches(matches);
                     self.search_query = Some(cmd);
                 }
                 self.cmd_builder.clear();
@@ -371,13 +381,21 @@ impl App {
                 match self.stdout_rx.try_recv() {
                     Ok(s) => {
                         let mut pages = self.pages.write().unwrap();
+                        let old_first_index = pages.first_index();
                         pages.add_line(&s);
+                        let new_first_index = pages.first_index();
+
+                        if new_first_index > old_first_index {
+                            self.scroll_state.remove_matches_before(new_first_index);
+                        }
+
                         let pages_len = pages.lines_count();
-                        if self.scroll_state.auto_scroll() {
-                            if let Some(query) = &self.search_query {
-                                let new_line_idx = pages_len.saturating_sub(1);
-                                if let Some(line) = pages.get_line(new_line_idx) {
-                                    if let Some(_match) = query.is_match(line) {
+                        if let Some(query) = &self.search_query {
+                            let new_line_idx = pages_len.saturating_sub(1);
+                            if let Some(line) = pages.get_line(new_line_idx) {
+                                if let Some(_match) = query.is_match(line) {
+                                    self.scroll_state.add_match(new_line_idx);
+                                    if self.scroll_state.auto_scroll() {
                                         self.scroll_state.set_cursor(Some(new_line_idx));
                                     }
                                 }

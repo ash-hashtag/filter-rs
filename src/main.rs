@@ -17,11 +17,13 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn start_ratatui() -> anyhow::Result<()> {
+    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     let mut term = ratatui::init();
     let mut app = App::new()?;
     let result = app.run(&mut term);
 
     ratatui::restore();
+    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
 
     if let Err(err) = result {
         log::error!("{:?}", err);
