@@ -53,8 +53,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> anyhow::Result<Self> {
-        let child_args = crate::get_child_args();
+    pub fn new(
+        child_args: Vec<String>,
+        pages_count: usize,
+        page_capacity: usize,
+    ) -> anyhow::Result<Self> {
         let title = child_args.join(" ");
 
         let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
@@ -68,15 +71,6 @@ impl App {
             None,
             Some(child_stdin_rx),
         )?;
-
-        let pages_count = std::env::var("PAGES_COUNT")
-            .ok()
-            .and_then(|x| x.parse::<usize>().ok())
-            .unwrap_or(32);
-        let page_capacity = std::env::var("PAGE_CAP")
-            .ok()
-            .and_then(|x| x.parse::<usize>().ok())
-            .unwrap_or(64 * 1024);
 
         let pages = Arc::new(RwLock::new(Pages::new(page_capacity, pages_count)));
         let scroll_state = PageScrollState::new(pages.clone());
