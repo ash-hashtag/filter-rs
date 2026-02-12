@@ -127,13 +127,28 @@ impl Pages {
     }
 
     pub fn find_all_matches<M: Matcher + ?Sized>(&self, matcher: &M) -> Vec<usize> {
-        let mut matches = Vec::new();
-        for (i, line) in self.iter().enumerate() {
-            if matcher.is_match(line).is_some() {
-                matches.push(self.global_offset + i);
-            }
+        use rayon::prelude::*;
+
+        let mut page_start_indices = Vec::with_capacity(self.pages.len());
+        let mut current_idx = self.global_offset;
+        for page in &self.pages {
+            page_start_indices.push(current_idx);
+            current_idx += page.len();
         }
-        matches
+
+        self.pages
+            .par_iter()
+            .zip(page_start_indices.par_iter())
+            .flat_map(|(page, &start_idx)| {
+                let mut page_matches = Vec::new();
+                for (i, line) in page.iter().enumerate() {
+                    if matcher.is_match(line).is_some() {
+                        page_matches.push(start_idx + i);
+                    }
+                }
+                page_matches
+            })
+            .collect()
     }
 
     pub fn iter(&self) -> PagesIter<'_> {
@@ -455,4 +470,39 @@ fn test_pages_overflow_recycle() {
 
     // Verify current_lines_count
     assert_eq!(pages.current_lines_count(), 2);
+}
+
+#[test]
+fn test_find_all_matches() {
+    let mut pages = Pages::new(100, 5);
+    pages.add_line("row 1: apple");
+    pages.add_line("row 2: banana");
+    pages.add_line("row 3: apple pie");
+    pages.add_line("row 4: cherry");
+    pages.add_line("row 5: pineapple");
+
+    struct SubstringMatcher(String);
+    impl Matcher for SubstringMatcher {
+        fn is_match(&self, s: &str) -> Option<std::ops::Range<usize>> {
+            let start = s.find(&self.0)?;
+            Some(start..start + self.0.len())
+        }
+    }
+
+    let matcher = SubstringMatcher("apple".to_string());
+    let matches = pages.find_all_matches(&matcher);
+
+    // Matches should be at indices 0, 2, 4 (0-indexed lines)
+    assert_eq!(matches, vec![0, 2, 4]);
+
+    // Test with global offset (after recycling)
+    let mut pages = Pages::new(10, 2); // 1 line per page if line is 10 chars
+    pages.add_line("line0_10ch");
+    pages.add_line("line1_10ch");
+    pages.add_line("line2_grep"); // this should trigger recycle of line0
+
+    assert_eq!(pages.global_offset, 1);
+    let matcher = SubstringMatcher("grep".to_string());
+    let matches = pages.find_all_matches(&matcher);
+    assert_eq!(matches, vec![2]);
 }

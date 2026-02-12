@@ -3,7 +3,7 @@ use std::ops::Range;
 use ratatui::widgets::{Block, Paragraph, Widget};
 use regex::Regex;
 
-pub trait Matcher {
+pub trait Matcher: Sync {
     fn is_match(&self, s: &str) -> Option<Range<usize>>;
 }
 

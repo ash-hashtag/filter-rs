@@ -53,7 +53,7 @@ filter <command> [args...]
 filter flutter run
 ```
 
-** npm scripts:**
+**npm scripts:**
 ```bash
 filter npm run dev
 ```
