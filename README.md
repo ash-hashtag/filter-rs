@@ -22,13 +22,13 @@
 ## 📸 Screenshots
 
 ### Clean Interface
-![Clean Interface](assets/Screenshot_20260204_145729.png)
+![Clean Interface](assets/Screenshot_20260204_145729.webp)
 
 ### Active Filtering
-![Active Filtering](assets/Screenshot_20260204_145817.png)
+![Active Filtering](assets/Screenshot_20260204_145817.webp)
 
 ### Pattern Matching
-![Pattern Matching](assets/Screenshot_20260204_145845.png)
+![Pattern Matching](assets/Screenshot_20260204_145845.webp)
 
 ## 🚀 Quick Start
 
