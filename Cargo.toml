@@ -1,6 +1,6 @@
 [package]
 name = "filter-rs"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 license = "MIT"
 description = "TUI for live log filtering and searching"
@@ -15,20 +15,20 @@ path = "src/main.rs"
 
 
 [dependencies]
-anyhow = "1.0.93"
-clap = { version = "4.5.21", features = ["derive"] }
-crossterm = "0.28.1"
-env_logger = "0.11.5"
-log = "0.4.22"
-rand = "0.8.5"
-ratatui = "0.29.0"
-rayon = "1.10.0"
-regex = "1.11.1"
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive"] }
+crossterm = "0.29.0"
+env_logger = "0.11.10"
+log = "0.4.29"
+rand = "0.10.0"
+ratatui = "0.30.0"
+rayon = "1.11.0"
+regex = "1.12.3"
 shellwords = "1.1.0"
-textwrap = "0.16.1"
-thiserror = "2.0.3"
+textwrap = "0.16.2"
+thiserror = "2.0.18"
 unicode-linebreak = "0.1.5"
-unicode-width = "0.2.0"
+unicode-width = "0.2.2"
 
 
 [profile.release]
