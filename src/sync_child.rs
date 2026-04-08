@@ -43,9 +43,21 @@ pub fn spawn_child_process(
 
     let mut cmd = Command::new(iter.next().context("Arguments aren't enough")?);
     cmd.args(iter)
-        .stdout(Stdio::piped())
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(if stdout_tx.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if stderr_tx.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdin(if stdin_rx.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
 
     let mut child = cmd.spawn()?;
 
@@ -53,19 +65,22 @@ pub fn spawn_child_process(
     let mut stderr_handle = None;
     let mut stdout_handle = None;
 
-    if let (Some(stdout_tx), Some(stdout)) = (stdout_tx, child.stdout.take()) {
-        stdout_handle = Some(std::thread::spawn(|| read_lines(stdout, stdout_tx)));
+    if let Some(stdout_tx) = stdout_tx {
+        if let Some(stdout) = child.stdout.take() {
+            stdout_handle = Some(std::thread::spawn(|| read_lines(stdout, stdout_tx)));
+        }
     }
-    if let (Some(stderr_tx), Some(stderr)) = (stderr_tx, child.stderr.take()) {
-        stderr_handle = Some(std::thread::spawn(|| read_lines(stderr, stderr_tx)));
+    if let Some(stderr_tx) = stderr_tx {
+        if let Some(stderr) = child.stderr.take() {
+            stderr_handle = Some(std::thread::spawn(|| read_lines(stderr, stderr_tx)));
+        }
     }
-    if let (Some(stdin_rx), Some(stdin)) = (stdin_rx, child.stdin.take()) {
-        stdin_handle = Some(std::thread::spawn(|| write_bytes(stdin, stdin_rx)));
+    if let Some(stdin_rx) = stdin_rx {
+        if let Some(stdin) = child.stdin.take() {
+            stdin_handle = Some(std::thread::spawn(|| write_bytes(stdin, stdin_rx)));
+        }
     }
 
-    // let stdout = child.stdout.take().context("No stdout of child")?;
-    // let stderr = child.stderr.take().context("No stderr of child")?;
-    // let stdin = child.stdin.take().context("No stdin of child")?;
     Ok(ChildHandle {
         child,
         stdin_handle,
@@ -86,7 +101,7 @@ where
             break;
         } else {
             if buf.is_empty() {
-                log::info!("received child stdout eof");
+                log::info!("received child output eof");
                 break;
             }
 

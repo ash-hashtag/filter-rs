@@ -1,6 +1,6 @@
 [package]
 name = "filter-rs"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2021"
 license = "MIT"
 description = "TUI for live log filtering and searching"

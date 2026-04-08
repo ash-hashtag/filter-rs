@@ -60,15 +60,14 @@ impl App {
     ) -> anyhow::Result<Self> {
         let title = child_args.join(" ");
 
-        let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+
         let (child_stdin_tx, child_stdin_rx) = std::sync::mpsc::channel();
 
-        // Note: spawn_child_process implementation might need to be checked if it returns handle and pid
-        // Assuming it's the same as in main.rs
         let child_handle = sync_child::spawn_child_process(
             &child_args,
-            Some(stdout_tx),
-            None,
+            Some(output_tx.clone()),
+            Some(output_tx),
             Some(child_stdin_rx),
         )?;
 
@@ -85,7 +84,7 @@ impl App {
             should_quit: false,
 
             child_handle: Some(child_handle),
-            stdout_rx,
+            stdout_rx: output_rx,
             child_stdin_tx,
             child_spawn_instant: Instant::now(),
             child_exited: false,
