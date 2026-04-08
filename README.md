@@ -35,7 +35,7 @@
 ### Installation
 
 ```bash
-cargo install filter
+cargo install filter-rs
 ```
 
 ### Usage
