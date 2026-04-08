@@ -2,6 +2,9 @@
 name = "filter"
 version = "0.0.6"
 edition = "2021"
+license = "MIT"
+description = "TUI for live log filtering and searching"
+repository = "https://github.com/ash-hashtag/filter-rs"
 
 [dependencies]
 anyhow = "1.0.93"
