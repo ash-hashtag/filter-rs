@@ -92,7 +92,7 @@ RUST_LOG=debug filter your-command
 ### Building from source
 
 ```bash
-git clone https://github.com/yourusername/filter-rs.git
+git clone https://github.com/ash-hashtag/filter-rs.git
 cd filter-rs
 cargo build --release
 ```
