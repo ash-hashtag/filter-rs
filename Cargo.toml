@@ -5,6 +5,8 @@ edition = "2021"
 license = "MIT"
 description = "TUI for live log filtering and searching"
 repository = "https://github.com/ash-hashtag/filter-rs"
+keywords = ["log", "filter", "tui", "cli"]
+categories = ["tui"]
 
 
 [[bin]]
